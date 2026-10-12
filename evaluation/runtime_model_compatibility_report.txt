@@ -1,0 +1,55 @@
+================================================================================
+SIH 2026 - PROBLEM STATEMENT 26145
+AI-Based Detection of Cyber Threats in Unidirectional IP Traffic
+STEP 15: RUNTIME FEATURE PROVENANCE AND MODEL-COMPATIBILITY VALIDATION
+================================================================================
+
+1. EXECUTIVE COMPATIBILITY SUMMARY:
+----------------------------------
+ - DDoS Detection (Random Forest, Step 10):
+   Status: PARTIALLY_COMPATIBLE
+   Rationale: Core volumetric and rate features (packets/sec, bytes/sec, packet/byte
+   ratios, flow duration, TCP control flag counters) are mathematically exact and causally
+   reproduced. However, subflow activity segmentation (Active/Idle time metrics) and initial
+   TCP window options (Init_Win_bytes) are approximated in lightweight streaming capture
+   without full TCP state reassembly.
+
+ - Botnet C2 Detection (Hybrid PCA / Beaconing, Step 8/9):
+   Status: FULLY_COMPATIBLE
+   Rationale: All 46 online C2 features were specifically engineered for causal streaming
+   NetFlow / IP flow records. The FeatureAdapter maintains rolling in-memory deques indexed
+   by (SrcIP, DstIP) that calculate exact sliding-window counts (60s, 300s), running IAT
+   regularity (CV), destination fan-out ratios, and connection states with ZERO future leakage.
+
+ - Reconnaissance / PortScan Detection (Isolation Forest, Step 12):
+   Status: PARTIALLY_COMPATIBLE
+   Rationale: While the 78 feature definitions match the CIC-IDS2017 schema, the training
+   benchmark lacked source/destination host fan-out. The unsupervised Isolation Forest is
+   highly sensitive to flow-level statistical distributions, and individual probe flows
+   require host-level fan-out aggregation (architected in Step 12A) for high operational
+   fidelity in live environments.
+
+2. FEATURE PROVENANCE BREAKDOWN:
+--------------------------------
+ - Total Evaluated Features across 3 Models: 198 (74 DDoS + 46 C2 + 78 PortScan)
+ - DIRECT (Extracted directly from IP/TCP headers): 18 features (9.1%)
+ - DERIVED (Exact arithmetic calculations from flow state): 112 features (56.6%)
+ - AGGREGATED (Causal historical state over sliding windows): 28 features (14.1%)
+ - APPROXIMATED (Lightweight metadata estimates for deep TCP options): 40 features (20.2%)
+ - UNAVAILABLE: 0 features (0.0%)
+ - INVALID / FABRICATED: 0 features (0.0%)
+
+3. STRICT CAUSAL & SAFETY VERIFICATION:
+---------------------------------------
+ - Future Information Leakage: NONE (All rolling statistics look strictly backward in time).
+ - Label Information in Inference: NONE.
+ - Payload Retention / Decryption: NONE (Metadata-only processing).
+ - Packet Modification / Injection: NONE (Read-only passive capture).
+
+4. OPERATIONAL RECOMMENDATION:
+------------------------------
+ - DDoS Detector: Safe for runtime inference; alerts on massive packet/byte rate anomalies.
+ - C2 Detector: Fully operational for real-time periodic beaconing and repeat connection tracking.
+ - PortScan Detector: Functional as a flow-level anomaly indicator; should be fused with
+   the Step 12A host fan-out aggregator during Phase 4 multi-agent alert fusion.
+================================================================================

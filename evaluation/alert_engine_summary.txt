@@ -1,0 +1,43 @@
+================================================================================
+SIH 2026 - PROBLEM STATEMENT 26145
+AI-Based Detection of Cyber Threats in Unidirectional IP Traffic
+STEP 16: UNIFIED THREAT ALERT ENGINE EVALUATION REPORT
+================================================================================
+
+1. EVALUATION OVERVIEW:
+ - Ingestion Source:         data/processed/live/live_flows.jsonl
+ - Total Flows Evaluated:    18
+ - Total Threat Alerts:      13
+ - Benign Flows:             1 (5.56%)
+ - Alert Log (JSONL):        data/processed/live/alerts/threat_alerts.jsonl
+ - Alert Table (CSV):        data/processed/live/alerts/threat_alerts.csv
+
+2. SEVERITY DISTRIBUTION:
+ - CRITICAL:                 9
+ - HIGH:                     4
+ - MEDIUM:                   0
+ - LOW:                      0
+ - BENIGN:                   1
+
+3. THREAT CLASS BREAKDOWN:
+ - DDoS:                     0
+ - BOTNET_C2:                8
+ - RECON_PORTSCAN:           0
+ - MULTI_THREAT:             5
+ - BENIGN:                   1
+
+4. DETECTOR TRIGGER COUNTS:
+ - HybridPCA_Botnet_C2                : 8
+ - IsolationForest_PortScan+HybridPCA_Botnet_C2: 5
+ - MultiThreatEnsemble                : 1
+
+5. COMPATIBILITY DISCLOSURE:
+ - Fully Compatible Detections:       9
+ - Partially Compatible Detections:   5 (Model limitations disclosed in evidence)
+ - Incompatible Detections Suppressed:0
+
+6. AUDITABILITY & PASSIVE OPERATION:
+ - Every generated alert includes structured supporting evidence items derived from flow features.
+ - Zero payload bytes accessed or retained.
+ - Zero packet transmission or active mitigation actions executed.
+================================================================================

@@ -1,0 +1,19 @@
+flow_id,old_detection,new_detection,old_severity,new_severity,old_confidence,new_confidence,new_confidence_band,reason_for_change
+flow_udp_d6b50081f846f309,BOTNET_C2,BENIGN,HIGH,BENIGN,0.6213,None,NOT_APPLICABLE,Warm-up history check prevented cold-start flow from artificially defaulting IAT regularity to 1.0; marked as INSUFFICIENT_HISTORY / BENIGN.
+flow_tcp_c136e4a73153eae7,BOTNET_C2,BENIGN,HIGH,BENIGN,0.6162,None,NOT_APPLICABLE,Warm-up history check prevented cold-start flow from artificially defaulting IAT regularity to 1.0; marked as INSUFFICIENT_HISTORY / BENIGN.
+flow_tcp_29ca563253401ed3,MULTI_THREAT,RECON_PORTSCAN,CRITICAL,LOW,1.0,0.1924,LOW_CONFIDENCE,C2 warm-up check removed uncalibrated C2 threat; single-flow PortScan IF anomaly triage de-escalated severity from CRITICAL to LOW.
+flow_tcp_e7a2c62f5731cd37,BENIGN,BENIGN,BENIGN,BENIGN,None,None,NOT_APPLICABLE,Remained consistently classified as BENIGN baseline.
+flow_tcp_9bdac9de110505af,MULTI_THREAT,RECON_PORTSCAN,CRITICAL,LOW,1.0,0.1789,LOW_CONFIDENCE,C2 warm-up check removed uncalibrated C2 threat; single-flow PortScan IF anomaly triage de-escalated severity from CRITICAL to LOW.
+flow_tcp_cc113b26db9f874b,BOTNET_C2,BENIGN,CRITICAL,BENIGN,1.0,None,NOT_APPLICABLE,Warm-up history check prevented cold-start flow from artificially defaulting IAT regularity to 1.0; marked as INSUFFICIENT_HISTORY / BENIGN.
+flow_tcp_8e4af01b5631fa8c,MULTI_THREAT,RECON_PORTSCAN,CRITICAL,LOW,1.0,0.1915,LOW_CONFIDENCE,C2 warm-up check removed uncalibrated C2 threat; single-flow PortScan IF anomaly triage de-escalated severity from CRITICAL to LOW.
+flow_tcp_3897c4445986faff,BOTNET_C2,BENIGN,HIGH,BENIGN,0.6814,None,NOT_APPLICABLE,Warm-up history check prevented cold-start flow from artificially defaulting IAT regularity to 1.0; marked as INSUFFICIENT_HISTORY / BENIGN.
+flow_tcp_e539e417d7a71c02,BOTNET_C2,BENIGN,CRITICAL,BENIGN,1.0,None,NOT_APPLICABLE,Warm-up history check prevented cold-start flow from artificially defaulting IAT regularity to 1.0; marked as INSUFFICIENT_HISTORY / BENIGN.
+flow_tcp_32d1314c7596ad2b,SUPPRESSED_DUPLICATE,MULTI_THREAT,SUPPRESSED,LOW,None,0.8166,LOW_CONFIDENCE,Evaluated under calibrated audit pipeline as MULTI_THREAT (LOW).
+flow_tcp_9ff5c532ab32f974,BOTNET_C2,BENIGN,CRITICAL,BENIGN,1.0,None,NOT_APPLICABLE,Warm-up history check prevented cold-start flow from artificially defaulting IAT regularity to 1.0; marked as INSUFFICIENT_HISTORY / BENIGN.
+flow_tcp_2a071310e16c3157,BOTNET_C2,BENIGN,HIGH,BENIGN,0.605,None,NOT_APPLICABLE,Warm-up history check prevented cold-start flow from artificially defaulting IAT regularity to 1.0; marked as INSUFFICIENT_HISTORY / BENIGN.
+flow_udp_15529d4186da2a60,BOTNET_C2,BENIGN,CRITICAL,BENIGN,1.0,None,NOT_APPLICABLE,Warm-up history check prevented cold-start flow from artificially defaulting IAT regularity to 1.0; marked as INSUFFICIENT_HISTORY / BENIGN.
+flow_tcp_8aa813d2cec112cd,MULTI_THREAT,RECON_PORTSCAN,CRITICAL,LOW,1.0,0.0613,LOW_CONFIDENCE,C2 warm-up check removed uncalibrated C2 threat; single-flow PortScan IF anomaly triage de-escalated severity from CRITICAL to LOW.
+flow_udp_13e3183192bd4b48,SUPPRESSED_DUPLICATE,BOTNET_C2,SUPPRESSED,HIGH,None,1.0,HIGH_CONFIDENCE,Evaluated under calibrated audit pipeline as BOTNET_C2 (HIGH).
+flow_udp_be3fef831b01e3c3,SUPPRESSED_DUPLICATE,BENIGN,SUPPRESSED,BENIGN,None,None,NOT_APPLICABLE,Warm-up history check reclassified underlying flow as BENIGN baseline.
+flow_tcp_c0352f18c02ee128,MULTI_THREAT,RECON_PORTSCAN,CRITICAL,LOW,1.0,0.154,LOW_CONFIDENCE,C2 warm-up check removed uncalibrated C2 threat; single-flow PortScan IF anomaly triage de-escalated severity from CRITICAL to LOW.
+flow_tcp_60e5f5a8c89ffea6,SUPPRESSED_DUPLICATE,BOTNET_C2,SUPPRESSED,HIGH,None,1.0,HIGH_CONFIDENCE,Evaluated under calibrated audit pipeline as BOTNET_C2 (HIGH).

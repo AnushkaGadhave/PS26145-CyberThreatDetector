@@ -1,0 +1,73 @@
+================================================================================
+SIH 2026 - PROBLEM STATEMENT 26145
+AI-Based Detection of Cyber Threats in Unidirectional IP Traffic
+PHASE: CIC-IDS2017 DDoS Detection using Random Forest (Strict Chronological)
+================================================================================
+
+1. DATASET & THREAT SCOPE:
+ - Source Benchmark:       CIC-IDS2017 (Canadian Institute for Cybersecurity)
+ - Positive Threat Class:  DDoS (Volumetric LOIC flood attack — July 7th) [y = 1]
+ - Negative Normal Class:  BENIGN (Normal baseline traffic) [y = 0]
+ - Total Flows Processed:  2,224,500
+ - Excluded Attack Types:  DoS Hulk, DoS GoldenEye, DoS slowloris, DoS Slowhttptest,
+                           FTP-Patator, SSH-Patator, PortScan, Bot, Web Attack,
+                           Infiltration, Heartbleed (Filtered in Step 09)
+
+2. CHRONOLOGICAL PARTITIONING METHODOLOGY:
+ - Split Methodology:      Strict Chronological Intra-Day 70/30 Split
+ - Training Partition:     First 70% of historical DDoS & normal traffic
+   * Original Train Rows:  1,557,149 (89,611 DDoS, 1,467,538 BENIGN)
+   * Downsampled Train:    358,444 (89,611 DDoS, 268,833 BENIGN; 3:1 ratio)
+   * DDoS Train Index:     18,600 → 139,859
+ - Testing Partition:      Subsequent 30% of unseen future traffic
+   * Test Flows (Unseen):  667,351 (38,405 DDoS, 628,946 BENIGN)
+   * DDoS Test Index:      139,860 → 195,671
+   * Causal Precedence:    train_ddos_max (139,859) < test_ddos_min (139,860) [STRICT TRUE]
+ - Data Scaling:           None (Random Forest is scale-invariant; raw physical units preserved)
+ - Imputation:             None required (0 nulls / 0 infinities in processed feature set)
+
+3. MODEL ARCHITECTURE & HYPERPARAMETERS:
+ - Model Family:           RandomForestClassifier (scikit-learn)
+ - Number of Trees:        200
+ - Max Tree Depth:         20 (Actual average depth: 17.81)
+ - Min Samples per Leaf:   2
+ - Max Features per Split: sqrt (8 features)
+ - Class Weight:           balanced_subsample
+ - Random Seed:            42
+ - Multi-threading:        n_jobs=-1
+ - Training Duration:      31.23 seconds
+
+4. PERFORMANCE EVALUATION (Unseen Chronological Test Set, Th = 0.50):
+ - Accuracy:               0.999879 (99.9879%)
+ - Precision:              0.999583 (99.9583%)
+ - Recall (TPR):           0.998308 (99.8308%)
+ - F1-Score:               0.998945
+ - False Positive Rate:    0.000025 (0.002544%)
+ - True Positive Rate:     0.998308 (99.8308%)
+ - ROC-AUC:                0.999755
+ - PR-AUC:                 0.999549
+
+5. CONFUSION MATRIX:
+ - True Positives (TP):    38,340
+ - False Positives (FP):   16
+ - True Negatives (TN):    628,930
+ - False Negatives (FN):   65
+
+6. TOP 10 INFLUENTIAL FEATURES:
+  1. Avg Fwd Segment Size                (Gini Importance: 0.0968)
+  2. act_data_pkt_fwd                    (Gini Importance: 0.0811)
+  3. Fwd Packet Length Max               (Gini Importance: 0.0750)
+  4. Fwd Packet Length Mean              (Gini Importance: 0.0610)
+  5. Bwd Packet Length Std               (Gini Importance: 0.0470)
+  6. Bwd Packet Length Mean              (Gini Importance: 0.0463)
+  7. Subflow Fwd Bytes                   (Gini Importance: 0.0418)
+  8. Packet Length Std                   (Gini Importance: 0.0328)
+  9. FwdBwdPacketRatio                   (Gini Importance: 0.0315)
+ 10. Fwd Header Length.1                 (Gini Importance: 0.0301)
+
+7. TECHNICAL LIMITATIONS & OPERATIONAL CONSIDERATIONS:
+ - The model was evaluated on later traffic that occurred after the training period, providing a more realistic temporal evaluation for network-threat detection.
+ - Features rely on statistical flow metrics (packet lengths, inter-arrival times, TCP flags).
+ - Deployment in modern production networks must account for encrypted HTTPS/TLS 1.3 multiplexing,
+   asymmetrical WAN routing, and dynamic application-layer DDoS attacks.
+================================================================================

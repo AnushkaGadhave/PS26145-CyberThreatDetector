@@ -1,0 +1,153 @@
+================================================================================
+SIH 2026 PS 26145: AI-BASED DETECTION OF CYBER THREATS IN UNIDIRECTIONAL IP TRAFFIC
+STEP 16A: FALSE-POSITIVE ANALYSIS AND RUNTIME ALERT CALIBRATION REPORT
+================================================================================
+
+1. OBSERVED ALERT RATE INVESTIGATION
+--------------------------------------------------------------------------------
+During Step 16 runtime evaluation of passive live Wi-Fi traffic (18 flows captured
+on interface MT7921, 192.168.0.105), the unified threat alert engine produced
+an unexpectedly high alert rate:
+- Total Live Flows Evaluated: 18
+- Initial Threat Alerts Generated: 13 alerts + 1 explicit benign (4 deduplicated)
+- Initial Threat Classes: 8 BOTNET_C2, 5 MULTI_THREAT, 1 BENIGN
+- Initial Severity Breakdown: 9 CRITICAL, 4 HIGH, 1 BENIGN
+
+CRITICAL SCIENTIFIC CAVEAT:
+"The current live capture is unlabeled and therefore cannot establish attack ground truth."
+This traffic represents ordinary user activity (browsing, DNS lookups, TLS connections).
+The high alert rate MUST NOT be presented as evidence of real cyber attacks.
+"The high BOTNET_C2 alert rate indicates that runtime calibration and/or domain
+adaptation requires further validation."
+
+
+2. C2 FALSE-POSITIVE INVESTIGATION & PIPELINE TRACE
+--------------------------------------------------------------------------------
+The 8 initial BOTNET_C2 alerts were investigated across the complete scoring pipeline:
+FlowRecord -> C2 Features -> StandardScaler -> PCA -> DBSCAN / MSE -> Hybrid Score.
+
+Intermediate Tracing Results:
+a) Flow flow_udp_d6b50081f846f309 (UDP 192.168.0.100 -> 255.255.255.255:5625 broadcast):
+   - Duration: 13.93s, Packets: 15, Bytes: 855B.
+   - Raw IAT_Regularity_Causal: 1.0000 (cold start default).
+   - RepeatRatio_SrcDst_Causal: 1.0000 (1 observation / 1 source flow).
+   - Scaled feature vector norm: 51.0435.
+   - PCA Reconstruction MSE: 0.980506.
+   - DBSCAN Nearest Core Distance: 44.4841 (Epsilon threshold: 2.2944).
+   - Uncalibrated Runtime Score: 0.6213 -> Triggered HIGH severity BOTNET_C2 alert.
+   - Root Cause: Cold-start default assigned maximum periodicity (1.0) and concentration
+     (1.0) to an isolated LAN broadcast packet stream.
+
+b) Flow flow_tcp_29ca563253401ed3 (TCP 192.168.0.104 -> 172.217.115.4:443 Google HTTPS):
+   - Duration: 12.47s, Packets: 3067, Bytes: 2,765,260B (2.76 MB).
+   - Scaled feature vector norm: 253.4450 (max scaled component: 251.65).
+   - PCA Reconstruction MSE: 1060.040078.
+   - DBSCAN Nearest Core Distance: 121.1961 (Epsilon threshold: 2.2944).
+   - Uncalibrated Runtime Score: 1.0000 -> Triggered CRITICAL MULTI_THREAT alert.
+   - Root Cause: Massive feature distribution shift. CTU-13 Scenario 42 baseline normal
+     flows had mean SrcBytes = 707B (std = 8277B). A modern 2.76 MB TLS stream is >300
+     standard deviations from training baseline, generating enormous PCA reconstruction error.
+
+c) Flow flow_tcp_e7a2c62f5731cd37 (TCP 192.168.0.104 -> 172.217.115.4:443):
+   - Duration: 12.02s, Packets: 4, Bytes: 815B.
+   - Scaled vector norm: 21.8079.
+   - PCA Reconstruction MSE: 0.646519.
+   - DBSCAN Core Distance: 10.5010.
+   - Runtime Score: 0.4097 < 0.50 -> Correctly classified as BENIGN.
+
+
+3. PORTSCAN FALSE-POSITIVE INVESTIGATION
+--------------------------------------------------------------------------------
+The PortScan Isolation Forest detector was trained on CIC-IDS2017 Tuesday normal baseline
+flows with a 5% FPR threshold of +0.026465 on negative decision_function scores.
+- Observation: High-throughput TLS/HTTPS flows (e.g. 3067 packets, 1198 packets, 887 packets)
+  produced Isolation Forest scores between +0.0613 and +0.1924, exceeding the threshold.
+- Reason: In CIC-IDS2017 baseline, normal enterprise flows had small average forward segment
+  sizes and low ACK/PSH counts. Modern Wi-Fi TLS streams are statistical outliers relative
+  to that baseline.
+- Finding: Single-flow Isolation Forest is only a weak statistical anomaly indicator in live
+  streaming traffic. Without multi-destination host fan-out corroboration, single flow
+  isolation scores cannot be interpreted as confirmed reconnaissance or port scanning.
+
+
+4. DOMAIN SHIFT ANALYSIS
+--------------------------------------------------------------------------------
+Comparison using evaluation/runtime_feature_distribution_comparison.csv:
+Key C2 Features Showing Large Distribution Differences:
+- IAT_CV_Causal: CTU-13 Training Mean = 3.0683 vs Live Wi-Fi Mean = 0.1058
+- IAT_Regularity_Causal: CTU-13 Training Median = 0.2620 vs Live Wi-Fi Mean = 0.9458 (due to cold start)
+- Src_Flows_60s: CTU-13 Training Mean = 272.18 vs Live Wi-Fi Mean = 6.83
+- DstFanoutRatio_Causal: CTU-13 Training Mean = 0.1178 vs Live Wi-Fi Mean = 0.8265
+- Total Bytes (TotBytes): CTU-13 Training Median = 240B vs Live Wi-Fi Mean = 261,288B
+
+Terminology note: Because statistical two-sample hypothesis testing was not run across
+multi-day live captures, these differences are properly documented as "large distribution
+differences" rather than unproven statistical significance claims.
+
+
+5. WARM-UP & CAUSAL STATE ANALYSIS
+--------------------------------------------------------------------------------
+A live causal detector cannot make reliable periodicity claims when host observation history
+is near zero.
+- Defect Identified: When FeatureAdapter initialized with empty rolling deques, initial
+  flows evaluated with len(prev_iats) < 2 defaulted iat_cv to 0.0, causing iat_regularity
+  to compute as 1.0 / (1.0 + 0.0) = 1.0 (perfect beaconing).
+- Adopted Warm-Up Policy:
+  * Minimum source flow history: Src_Flows_BeforeOrAtT >= 3
+  * Minimum source-destination flow history: SrcDst_Flows_BeforeOrAtT >= 3 (at least 2 IAT intervals)
+  * If conditions are not satisfied, detector output is marked as INSUFFICIENT_HISTORY,
+    IAT_Regularity_Causal is defaulted to 0.0, and aggressive threat classification is suppressed.
+
+
+6. ALERT SEVERITY ESCALATION & CASCADING AUDIT
+--------------------------------------------------------------------------------
+- Defect Identified: Step 16 AlertEngine automatically assigned severity = "CRITICAL",
+  threat_class = "MULTI_THREAT", and forced confidence = 1.0 whenever more than one detector
+  exceeded basic baseline thresholds (e.g. C2 score >= 0.50 and PortScan score >= 0.0265).
+- Triage Fix:
+  * Detector output is decoupled from alert severity triage.
+  * In UNLABELED_LIVE context, multiple weak anomalies do NOT escalate to CRITICAL.
+  * MULTI_THREAT requires at least two MEDIUM_CONFIDENCE detections or one HIGH_CONFIDENCE
+    corroboration.
+  * Introduced explicit confidence bands: LOW_CONFIDENCE, MEDIUM_CONFIDENCE, HIGH_CONFIDENCE.
+
+
+7. RECOMMENDED CHANGES & IMPLEMENTATION SUMMARY
+--------------------------------------------------------------------------------
+1. Schema & Context:
+   Added traffic_context ("UNLABELED_LIVE") and confidence_band fields to ThreatAlert.
+2. Warm-Up History Enforcement:
+   Added INSUFFICIENT_HISTORY detector status for cold-start flows (< 3 observations).
+3. Feature Adapter Calibration:
+   Fixed default IAT_Regularity_Causal to 0.0 on cold start (preventing false 1.0 beaconing).
+4. Alert Policy Review:
+   Explicitly documented prototype triage thresholds as PROTOTYPE_TRIAGE_THRESHOLD in
+   config/alert_policy.json.
+5. Calibrated Triage:
+   De-escalated single-flow PortScan IF anomalies to LOW severity; de-escalated unverified
+   C2 anomalies to LOW/MEDIUM severity.
+
+
+8. BEFORE / AFTER RECALIBRATION RESULTS (18 LIVE FLOWS)
+--------------------------------------------------------------------------------
+Before Recalibration (Step 16):
+- 13 Alerts (8 BOTNET_C2, 5 MULTI_THREAT)
+- 9 CRITICAL, 4 HIGH, 1 BENIGN, 4 Suppressed
+
+After Recalibration (Step 16A Audit Mode across all 18 flows):
+- 10 BENIGN (55.6% - cold starts properly categorized as baseline)
+- 5 RECON_PORTSCAN (27.8% - LOW severity anomaly indicator)
+- 2 BOTNET_C2 (11.1% - HIGH severity model suspicion on active sessions)
+- 1 MULTI_THREAT (5.6% - LOW severity multi-indicator)
+- CRITICAL Alerts: 0 (down from 9)
+
+
+9. REMAINING LIMITATIONS
+--------------------------------------------------------------------------------
+1. Unlabeled Live Traffic: The current Wi-Fi capture lacks ground-truth attack labels;
+   detections remain model suspicions rather than verified intrusion events.
+2. Dataset Age Shift: Models trained on CTU-13 (2011) and CIC-IDS2017 (2017) exhibit
+   structural domain shift when exposed to modern 2026 TLS 1.3 / QUIC Wi-Fi 6 flows.
+3. Host-Level Aggregation: Reconnaissance and C2 detection will benefit significantly from
+   multi-host fan-out state tracking across time windows rather than single-flow isolation.
+================================================================================

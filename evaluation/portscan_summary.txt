@@ -1,0 +1,72 @@
+================================================================================
+SIH 2026 - PROBLEM STATEMENT 26145
+AI-Based Detection of Cyber Threats in Unidirectional IP Traffic
+PHASE: CIC-IDS2017 Reconnaissance / PortScan Isolation Forest Detection
+================================================================================
+
+1. DATASET & THREAT SCOPE:
+ - Source Benchmark:          CIC-IDS2017 (Canadian Institute for Cybersecurity)
+ - Positive Threat Class:     PortScan (Network port scanning / reconnaissance) [y = 1]
+ - Negative Normal Class:     BENIGN (Normal baseline traffic) [y = 0]
+ - Total Flows Processed:     2,187,303
+ - Excluded Attack Families:  DDoS, DoS Hulk, DoS GoldenEye, DoS slowloris, DoS Slowhttptest,
+                              FTP-Patator, SSH-Patator, Bot, Web Attacks, Infiltration, Heartbleed
+
+2. ANOMALY MODELING & TRAINING BASELINE:
+ - Anomaly Model Family:      IsolationForest (scikit-learn)
+ - Training Baseline:         Clean Normal/BENIGN Traffic ONLY (100.0% Normal)
+ - Original Normal Baseline:  1,467,538 flows
+ - Sampled Normal Baseline:   300,000 flows (Sampled with random_state=42 for 8 GB RAM)
+ - Evaluation Dataset:        656,192 flows (27,246 PortScan, 628,946 Normal)
+ - Feature Scaling:           None (Isolation Forest is scale-invariant; raw physical units preserved)
+ - Imputation:                None required (0 missing / 0 infinities)
+
+3. MODEL HYPERPARAMETERS:
+ - Number of Trees:           200
+ - Contamination:             auto
+ - Max Samples per Tree:      auto (256)
+ - Max Features:              1.0 (78 features)
+ - Random Seed:               42
+ - Multi-threading:           n_jobs=-1
+ - Training Duration:         1.14 seconds
+
+4. THRESHOLD CALIBRATION (Normal Training Baseline):
+ - 1% Normal FPR Threshold:   0.121687
+ - 2% Normal FPR Threshold:   0.082396
+ - 5% Normal FPR (Default):   0.026465
+ - 10% Normal FPR Threshold:  -0.033148
+ - 20% Normal FPR Threshold:  -0.087947
+
+5. PERFORMANCE EVALUATION (Unseen Evaluation Partition, Th = 0.0265):
+ - Accuracy:                  0.920182 (92.0182%)
+ - Precision:                 0.000239 (0.0239%)
+ - Recall (TPR):              0.000220 (0.0220%)
+ - F1-Score:                  0.000229
+ - False Positive Rate:       0.039965 (3.9965%)
+ - True Positive Rate:        0.000220 (0.0220%)
+ - ROC-AUC:                   0.684973
+ - PR-AUC:                    0.059486
+
+6. CONFUSION MATRIX:
+ - True Positives (TP):       6
+ - False Positives (FP):      25,136
+ - True Negatives (TN):       603,810
+ - False Negatives (FN):      27,240
+
+7. TOP 10 ANOMALOUS SEPARATION FEATURES:
+  1. PacketsPerByte                      (Z-Score Separation: 3.5255)
+  2. PSH Flag Count                      (Z-Score Separation: 1.8692)
+  3. BwdByteRatio                        (Z-Score Separation: 1.2097)
+  4. Init_Win_bytes_forward              (Z-Score Separation: 1.1361)
+  5. FwdByteRatio                        (Z-Score Separation: 0.8663)
+  6. Bwd Packets/s                       (Z-Score Separation: 0.8444)
+  7. Min Packet Length                   (Z-Score Separation: 0.6884)
+  8. Bwd Packet Length Min               (Z-Score Separation: 0.6447)
+  9. ACK Flag Count                      (Z-Score Separation: 0.6428)
+ 10. Average Packet Size                 (Z-Score Separation: 0.6120)
+
+8. TECHNICAL LIMITATIONS & OPERATIONAL CONSIDERATIONS:
+ - The detector identifies flow-level statistical anomalies associated with the CIC-IDS2017 PortScan class.
+ - Raw source-IP fan-out across destination hosts/ports is absent in the benchmark MachineLearningCSV representation.
+ - High-confidence anomaly scores are suitable for passive monitoring and analyst alerting in SOC triage.
+================================================================================

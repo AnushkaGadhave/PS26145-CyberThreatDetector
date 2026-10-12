@@ -1,0 +1,23 @@
+==================================================
+SIH 2026 PS 26145 - BOTNET C2 DETECTION SUMMARY
+==================================================
+
+Training Rows:             49,853
+Testing Rows:              21,366
+Normal Training Baseline:  21,242 flows
+
+PCA Components:            15 (Variance: 0.8950)
+DBSCAN Epsilon:            2.2944 (min_samples: 20)
+DBSCAN Core Samples:       19,000
+
+Default Beaconing Thresh:  0.6796
+Default Hybrid Thresh:     0.7891
+
+--- DETECTOR PERFORMANCE ON UNSEEN TEST PERIOD ---
+             Detector  Accuracy  Precision  Recall     F1    FPR    TPR    TP   FP   TN   FN  ROC_AUC  PR_AUC
+       DBSCAN Anomaly    0.8704     0.8169  1.0000 0.8992 0.3070 1.0000 12350 2768 6248    0   0.9977  0.9929
+Statistical Beaconing    0.7306     0.9912  0.5387 0.6980 0.0065 0.5387  6653   59 8957 5697   0.9276  0.9510
+      Hybrid Detector    0.8770     0.9417  0.8390 0.8874 0.0711 0.8390 10362  641 8375 1988   0.9626  0.9745
+
+Best Balanced Detector:   Hybrid Detector
+Reason:                    Combines geometric manifold outlier detection with high-precision behavioral beaconing scores.

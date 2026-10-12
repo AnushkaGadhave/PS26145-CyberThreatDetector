@@ -1,0 +1,13 @@
+CIC-IDS2017 DDoS Detection — Chronological Random Forest Classification Report
+===============================================================================
+
+              precision    recall  f1-score   support
+
+  Normal (0)   0.999897  0.999975  0.999936    628946
+    DDoS (1)   0.999583  0.998308  0.998945     38405
+
+    accuracy                       0.999879    667351
+   macro avg   0.999740  0.999141  0.999440    667351
+weighted avg   0.999879  0.999879  0.999879    667351
+
+Evaluation Timestamp: 2026-10-07 20:07:33

@@ -1,0 +1,147 @@
+{
+  "policy_name": "SIH_26145_Threat_Alert_Policy",
+  "version": "1.1.0",
+  "suppression_window_seconds": 30.0,
+  "default_mode": "ALERT",
+  "traffic_context_default": "UNLABELED_LIVE",
+  "confidence_bands": {
+    "HIGH_CONFIDENCE": {
+      "definition": "Strong statistical evidence with fully compatible model features, validated causal history, and multi-indicator corroboration.",
+      "min_calibrated_score": 0.85
+    },
+    "MEDIUM_CONFIDENCE": {
+      "definition": "Moderate anomaly score or single-model threat detection with partial feature compatibility or limited corroboration.",
+      "min_calibrated_score": 0.50
+    },
+    "LOW_CONFIDENCE": {
+      "definition": "Weak anomaly score exceeding 5% baseline threshold, uncalibrated out-of-sample anomaly indicator, or uncorroborated single flow outlier.",
+      "min_calibrated_score": 0.0
+    }
+  },
+  "warmup_policy": {
+    "minimum_source_flows": 3,
+    "minimum_source_destination_flows": 3,
+    "insufficient_history_status": "INSUFFICIENT_HISTORY",
+    "insufficient_history_action": "Suppress aggressive classification; mark detector status as INSUFFICIENT_HISTORY."
+  },
+  "threat_categories": {
+    "DDoS": {
+      "display_name": "Distributed Denial of Service",
+      "model_status": "PARTIALLY_COMPATIBLE",
+      "critical_probability_threshold": 0.90,
+      "critical_threshold_metadata": {
+        "threshold_type": "PROTOTYPE_TRIAGE_THRESHOLD",
+        "source": "Random Forest predict_proba on CIC-IDS2017 Friday DDoS",
+        "reason": "Probabilities >= 0.90 represent extreme volumetric confidence under supervised Random Forest model.",
+        "model_calibration_basis": "Empirical decision boundary on 74 CIC-IDS2017 training features."
+      },
+      "high_probability_threshold": 0.50,
+      "high_threshold_metadata": {
+        "threshold_type": "PROTOTYPE_TRIAGE_THRESHOLD",
+        "source": "Standard binary classification decision boundary (p >= 0.50)",
+        "reason": "Standard majority voting threshold across Random Forest estimators.",
+        "model_calibration_basis": "Supervised training split on historical dataset."
+      },
+      "medium_probability_threshold": 0.25,
+      "medium_threshold_metadata": {
+        "threshold_type": "PROTOTYPE_TRIAGE_THRESHOLD",
+        "source": "Heuristic early-warning indicator",
+        "reason": "Captures sub-threshold volumetric growth before flooding saturates target.",
+        "model_calibration_basis": "Prototype triage threshold only; not statistically calibrated for standalone alerting."
+      },
+      "recommended_actions": [
+        "Monitor volumetric source packet and byte rates",
+        "Correlate with destination server CPU/network load metrics",
+        "Review ingress traffic patterns across border routers"
+      ]
+    },
+    "BOTNET_C2": {
+      "display_name": "Botnet Command and Control",
+      "model_status": "FULLY_COMPATIBLE",
+      "calibrated_decision_threshold": 0.78908,
+      "decision_threshold_metadata": {
+        "threshold_type": "MODEL_CALIBRATED_OPERATING_POINT",
+        "source": "CTU-13 Scenario 42 Normal Training Baseline (95th percentile Hybrid Score)",
+        "reason": "Guarantees 5% False Positive Rate on clean historical campus network traffic.",
+        "model_calibration_basis": "5% FPR quantile on 21,242 clean normal training flows in PCA + DBSCAN + Beaconing space."
+      },
+      "critical_probability_threshold": 0.85,
+      "critical_threshold_metadata": {
+        "threshold_type": "PROTOTYPE_TRIAGE_THRESHOLD",
+        "source": "Hybrid score >= 0.85 with verified repeated host causal history",
+        "reason": "Escalates to CRITICAL only when both geometric manifold anomaly and behavioral timing regularity are corroborated across >= 3 flows.",
+        "model_calibration_basis": "Prototype triage threshold; requires multi-flow history."
+      },
+      "high_probability_threshold": 0.50,
+      "high_threshold_metadata": {
+        "threshold_type": "PROTOTYPE_TRIAGE_THRESHOLD",
+        "source": "Normalized anomaly distance >= 0.50",
+        "reason": "Flags noticeable departure from normal baseline PCA reconstruction subspace.",
+        "model_calibration_basis": "Continuous distance metric normalized against 2x calibration threshold."
+      },
+      "medium_probability_threshold": 0.30,
+      "medium_threshold_metadata": {
+        "threshold_type": "PROTOTYPE_TRIAGE_THRESHOLD",
+        "source": "Early anomaly detection boundary",
+        "reason": "Provides low-severity analyst visibility into subtle timing irregularities.",
+        "model_calibration_basis": "Prototype triage threshold only."
+      },
+      "recommended_actions": [
+        "Review historical connection regularity and inter-arrival times",
+        "Correlate destination IP with external threat intelligence feeds",
+        "Inspect DNS resolution history for destination domain"
+      ]
+    },
+    "RECON_PORTSCAN": {
+      "display_name": "Reconnaissance / Port Scanning",
+      "model_status": "PARTIALLY_COMPATIBLE",
+      "anomaly_score_threshold": 0.026465,
+      "anomaly_score_threshold_metadata": {
+        "threshold_type": "MODEL_CALIBRATED_OPERATING_POINT",
+        "source": "CIC-IDS2017 Tuesday Normal Training Baseline (95th percentile negative decision_function)",
+        "reason": "Calibrated 5% FPR boundary for single-flow Isolation Forest on normal enterprise traffic.",
+        "model_calibration_basis": "Empirical quantile of Isolation Forest decision scores on 301,319 clean normal training flows."
+      },
+      "high_anomaly_score_threshold": 0.10,
+      "high_threshold_metadata": {
+        "threshold_type": "PROTOTYPE_TRIAGE_THRESHOLD",
+        "source": "Extreme isolation score heuristic",
+        "reason": "Severe statistical isolation from normal baseline flow distributions.",
+        "model_calibration_basis": "Prototype triage threshold only; requires host fan-out corroboration to confirm port scanning."
+      },
+      "recommended_actions": [
+        "Review source IP connection attempts across destination ports",
+        "Correlate with subnet firewall connection rejection logs",
+        "Monitor source host for subsequent lateral movement"
+      ]
+    },
+    "DGA_DNS_TUNNEL": {
+      "display_name": "DGA / DNS Tunneling",
+      "model_status": "NOT_YET_IMPLEMENTED",
+      "recommended_actions": [
+        "Inspect domain character entropy and DNS query volume"
+      ]
+    },
+    "ENCRYPTED_MALWARE": {
+      "display_name": "Encrypted Malware Communication",
+      "model_status": "NOT_YET_IMPLEMENTED",
+      "recommended_actions": [
+        "Inspect TLS handshake SNI and cipher suite metadata"
+      ]
+    },
+    "DATA_EXFILTRATION": {
+      "display_name": "Data Exfiltration in Unidirectional Traffic",
+      "model_status": "NOT_YET_IMPLEMENTED",
+      "recommended_actions": [
+        "Analyze sustained outbound byte volumes and ratio imbalances"
+      ]
+    }
+  },
+  "severity_weights": {
+    "CRITICAL": 4,
+    "HIGH": 3,
+    "MEDIUM": 2,
+    "LOW": 1,
+    "BENIGN": 0
+  }
+}

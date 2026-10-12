@@ -1,0 +1,16 @@
+CIC_Label,PS_Threat_Category,Mapping_Status,Reason,Recommended_Use,Additional_Data_Required
+DDoS,DDoS / Volumetric and Protocol Flooding,DIRECT,Directly represents distributed denial-of-service volumetric packet flooding traffic.,Primary training and evaluation set for DDoS Detection Engine.,No
+DoS Hulk,DDoS / Volumetric and Protocol Flooding,RELATED,Application-layer HTTP GET flooding DoS attack (HULK tool); related volumetric flooding mechanism.,Auxiliary DoS/flooding evaluation and robustness testing.,No
+DoS GoldenEye,DDoS / Volumetric and Protocol Flooding,RELATED,Layer-7 HTTP Keep-Alive and No-Cache resource exhaustion DoS attack; related protocol flooding.,Auxiliary DoS/flooding evaluation and robustness testing.,No
+DoS slowloris,DDoS / Volumetric and Protocol Flooding,RELATED,Slow-rate HTTP header starvation DoS attack; related protocol connection exhaustion mechanism.,Auxiliary slow-rate DoS detection study.,No
+DoS Slowhttptest,DDoS / Volumetric and Protocol Flooding,RELATED,Slow-rate HTTP POST body starvation DoS attack; related protocol starvation mechanism.,Auxiliary slow-rate DoS detection study.,No
+PortScan,Reconnaissance / Port Scanning,DIRECT,Directly represents active network reconnaissance and port scanning behavior.,Primary training and evaluation set for Reconnaissance Detection Engine.,No
+Bot,Botnet C2 Beaconing,RELATED,"Represents Ares botnet infected host traffic, but lacks explicit beaconing periodicity annotations required by PS 26145.",Initial botnet flow baseline; supplementary C2 evaluation.,Yes (CTU-13 or dedicated C2 beaconing dataset)
+BENIGN,Normal Baseline Traffic,DIRECT,Represents normal background network traffic across multiple protocols.,Baseline negative class (benign flow distribution) for all detection models.,No
+FTP-Patator,Uncovered / Authentication Attack,NOT_COVERED,FTP dictionary brute-force attack; outside the six core PS 26145 threat categories.,Out-of-scope for primary engines; retain for general anomaly testing if needed.,No
+SSH-Patator,Uncovered / Authentication Attack,NOT_COVERED,SSH dictionary brute-force attack; outside the six core PS 26145 threat categories.,Out-of-scope for primary engines; retain for general anomaly testing if needed.,No
+Web Attack � Brute Force,Uncovered / Web Application Attack,NOT_COVERED,Web application HTTP credential brute-force; outside the six core PS 26145 threat categories.,Out-of-scope for primary engines.,No
+Web Attack � XSS,Uncovered / Web Application Attack,NOT_COVERED,Cross-site scripting (XSS) payload injection; outside the six core PS 26145 threat categories.,Out-of-scope for primary engines.,No
+Web Attack � Sql Injection,Uncovered / Web Application Attack,NOT_COVERED,SQL injection payload attack; outside the six core PS 26145 threat categories.,Out-of-scope for primary engines.,No
+Infiltration,Uncovered / Multi-stage Infiltration,NOT_COVERED,Multi-stage internal pivot exploit; extremely small sample size (36 flows) and outside the 6 PS categories.,Out-of-scope for primary engines.,No
+Heartbleed,Uncovered / Vulnerability Exploit,NOT_COVERED,OpenSSL TLS heartbeat buffer over-read exploit; extremely small sample size (11 flows) and outside the 6 PS categories.,Out-of-scope for primary engines.,No

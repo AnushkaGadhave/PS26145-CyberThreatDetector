@@ -1,0 +1,145 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --bg-primary: #07072B;
+    --bg-secondary: #0B0B35;
+    --panel-bg: #10103D;
+    --panel-hover: #15154A;
+    --border-color: #242452;
+    --accent-lime: #A8F500;
+    --accent-lime-bright: #B7FF19;
+    --text-primary: #F5F5F7;
+    --text-secondary: #A5A5BE;
+    --blue: #4C8DFF;
+    --cyan: #39D7FF;
+    --success: #7DDB52;
+    --warning: #F7B84B;
+    --high: #FF8A3D;
+    --critical: #FF4D5A;
+  }
+
+  body {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    overflow-x: hidden;
+    margin: 0;
+    padding: 0;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    letter-spacing: -0.025em;
+  }
+
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+}
+
+/* Perspective Grid Floor (Parlo reference style) */
+.perspective-grid-container {
+  perspective: 700px;
+  perspective-origin: 50% 30%;
+  overflow: hidden;
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.perspective-grid {
+  position: absolute;
+  width: 200%;
+  height: 200%;
+  left: -50%;
+  top: 15%;
+  transform: rotateX(65deg);
+  background-image: 
+    linear-gradient(to right, rgba(36, 36, 82, 0.45) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(36, 36, 82, 0.45) 1px, transparent 1px);
+  background-size: 64px 64px;
+  transform-origin: 50% 0;
+  mask-image: radial-gradient(ellipse 65% 55% at 50% 20%, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 80%);
+  -webkit-mask-image: radial-gradient(ellipse 65% 55% at 50% 20%, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 80%);
+}
+
+/* Dot matrix pattern */
+.dot-matrix {
+  background-image: radial-gradient(rgba(165, 165, 190, 0.16) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.dot-matrix-fine {
+  background-image: radial-gradient(rgba(168, 245, 0, 0.18) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+
+/* Subtle glow utility */
+.glow-lime-subtle {
+  box-shadow: 0 0 35px -8px rgba(168, 245, 0, 0.22);
+}
+
+.glow-panel {
+  box-shadow: 0 20px 50px -15px rgba(0, 0, 0, 0.6), 0 0 1px 1px rgba(36, 36, 82, 0.5);
+}
+
+/* Keyframe animations */
+@keyframes pulseSubtle {
+  0%, 100% { opacity: 0.35; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(1.04); }
+}
+
+@keyframes floatSlow {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-7px); }
+}
+
+@keyframes pingDot {
+  0% { transform: scale(0.95); opacity: 0.9; }
+  50% { transform: scale(1.6); opacity: 0; }
+  100% { transform: scale(0.95); opacity: 0; }
+}
+
+@keyframes scanLine {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(1000%); }
+}
+
+.animate-pulse-subtle {
+  animation: pulseSubtle 6s ease-in-out infinite;
+}
+
+.animate-float-slow {
+  animation: floatSlow 6s ease-in-out infinite;
+}
+
+.animate-ping-dot {
+  animation: pingDot 2.4s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #07072B;
+}
+::-webkit-scrollbar-thumb {
+  background: #242452;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #39D7FF;
+}
+
+/* Accessibility: Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.001s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001s !important;
+    scroll-behavior: auto !important;
+  }
+}

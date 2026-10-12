@@ -1,0 +1,41 @@
+================================================================================
+SIH 2026 - PROBLEM STATEMENT 26145
+AI-Based Detection of Cyber Threats in Unidirectional IP Traffic
+PHASE: Step 12A - Reconnaissance / PortScan Telemetry & Feature Audit
+================================================================================
+
+1. EXECUTIVE AUDIT STATEMENT:
+Enhanced reconnaissance features require richer traffic/flow telemetry containing
+source/destination identifiers and timestamps. The currently available CIC-IDS2017
+MachineLearningCSV representation does not provide these fields.
+
+2. LOCAL DATASET AUDIT SUMMARY:
+ - CIC-IDS2017 MachineLearningCSV: Contains 79 flow-level statistical features.
+   CRITICAL FINDING: Source IP, Destination IP, Source Port, and Timestamps were
+   stripped by the benchmark creators during CSV generation.
+ - CTU-13 Scenario 42 (capture20110810.binetflow): Contains 5-tuple and timestamps,
+   but represents Neris Botnet C2 / Malware traffic with 0 CIC-IDS2017 PortScan flows.
+ - Raw Packet Captures (.pcap / .pcapng): No raw PCAP files exist in local storage.
+
+3. SCIENTIFIC & METHODOLOGICAL INTEGRITY (Section 28):
+ - No synthetic IP addresses were fabricated.
+ - No artificial timestamps were generated.
+ - No unverified cross-dataset label mapping was performed.
+ - Baseline Step 12 artifacts remain fully preserved and backed up.
+
+4. RECONNAISSANCE FEATURE PIPELINE ARCHITECTURE:
+ - 30 online-safe behavioral features specified across 10s, 30s, and 60s sliding windows:
+   * Source Host Fan-Out (Src_UniqueDstHost_10s/30s/60s)
+   * Destination Port Fan-Out (Src_UniqueDport_10s/30s/60s)
+   * Connection Attempt Counts & Rates (Src_FlowCount, Src_ConnectionRate)
+   * Target Pair Repetition (SrcDst_FlowCount_10s/30s/60s)
+   * Port & Host Diversity Ratios (PortDiversityRatio, HostFanoutRatio)
+   * TCP SYN & Failure Indicators (SynCount, FailedConnectionRatio)
+   * Destination Port Spread Range (DstPortRange_30s)
+   * Rapid Connection Burst Flags (RapidConnectionBurst_10s/30s/60s)
+
+5. OPERATIONAL INTEGRATION ROADMAP:
+ - In live network deployment (Phase 3: Npcap / Wireshark / NetFlow telemetry),
+   the online packet/flow listener will maintain in-memory circular ring buffers
+   indexed by Source IP to compute these 30 behavioral features in real-time.
+================================================================================

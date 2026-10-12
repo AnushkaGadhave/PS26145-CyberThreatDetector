@@ -1,0 +1,16 @@
+{
+  "dbscan_eps": 2.2943857589366146,
+  "dbscan_min_samples": 20,
+  "beaconing_features": [
+    "Src_Flows_60s",
+    "Src_Flows_300s",
+    "Src_Flows_BeforeOrAtT",
+    "DstFanoutRatio_Causal",
+    "IAT_Regularity_Causal",
+    "RepeatRatio_SrcDst_Causal"
+  ],
+  "beaconing_threshold_1pct": 0.7101931707623262,
+  "beaconing_threshold_5pct": 0.6795574020023224,
+  "beaconing_threshold_10pct": 0.6497261714213979,
+  "hybrid_threshold_5pct": 0.7890811835043781
+}
