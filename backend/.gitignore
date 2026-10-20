@@ -1,0 +1,36 @@
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Environment Variables & Secrets (NEVER COMMIT)
+.env
+*.env
+*.env.local
+
+# Allow example configuration template
+!.env.example
+
+# Bytecode & Caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local Datasets, Captures and Sensor Telemetry (DO NOT COMMIT)
+data/raw/
+data/processed/
+data/sensor_queue/
+*.pcap
+*.pcapng
+*.binetflow
+*.zip
+
+# Local SQLite databases, dumps & logs
+*.db
+*.sqlite
+*.sqlite3
+*.sql
+*.dump
+*.log
