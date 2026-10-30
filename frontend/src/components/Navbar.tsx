@@ -46,11 +46,10 @@ export const Navbar: React.FC<NavbarProps> = ({ onNavigate, currentRoute }) => {
 
   return (
     <header
-      className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${
-        scrolled
+      className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${scrolled
           ? 'bg-[#07072B]/90 backdrop-blur-md border-b border-[#242452] shadow-lg shadow-black/40 py-3.5'
           : 'bg-[#07072B]/60 backdrop-blur-sm border-b border-[#242452]/60 py-5'
-      }`}
+        }`}
     >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between">
@@ -58,7 +57,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onNavigate, currentRoute }) => {
           <button
             onClick={() => onNavigate('/')}
             className="flex items-center gap-3 text-left group focus:outline-none"
-            aria-label="NETRA Home"
+            aria-label="ThreatTrack Home"
           >
             <div className="relative w-9 h-9 rounded-lg bg-[#10103D] border border-[#242452] flex items-center justify-center group-hover:border-[#A8F500]/60 transition-colors">
               <div className="w-2.5 h-2.5 rounded-full bg-[#A8F500] animate-ping-dot absolute" />
@@ -67,11 +66,11 @@ export const Navbar: React.FC<NavbarProps> = ({ onNavigate, currentRoute }) => {
             </div>
             <div className="flex flex-col">
               <span className="font-heading font-extrabold text-lg tracking-tight text-[#F5F5F7] flex items-center gap-1.5">
-                NETRA
+                ThreatTrack
                 <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#A8F500]" />
               </span>
               <span className="text-[11px] font-medium tracking-normal text-[#A5A5BE] -mt-0.5 hidden sm:block">
-                Passive Network Threat Monitoring
+                AI-Powered Network Threat Monitoring
               </span>
             </div>
           </button>

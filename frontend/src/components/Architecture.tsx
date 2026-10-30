@@ -103,7 +103,7 @@ export const Architecture: React.FC = () => {
             <span className="text-[#A8F500]">NETWORK MONITORING</span>
           </h2>
           <p className="mt-4 text-base sm:text-lg text-[#A5A5BE] font-sans">
-            End-to-end implementation architecture for SIH Problem Statement 26145 from physical packet capture to operator dashboard.
+            End-to-end data pipeline from physical packet capture to real-time operator dashboard.
           </p>
         </div>
 
@@ -169,19 +169,6 @@ export const Architecture: React.FC = () => {
               </div>
             );
           })}
-        </div>
-
-        {/* Real Codebase Tech Verification Footnote */}
-        <div className="mt-12 rounded-xl bg-[#07072B] border border-[#242452] p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 text-xs font-mono text-[#A5A5BE]">
-          <div className="flex items-center gap-3">
-            <div className="w-2.5 h-2.5 rounded-full bg-[#A8F500] animate-pulse" />
-            <span>
-              <strong className="text-[#F5F5F7]">Repository Structure:</strong> Scapy sniffer in <code className="text-[#A8F500]">src/capture</code>, Flow & Feature extractor in <code className="text-[#A8F500]">src/features</code>, Detectors in <code className="text-[#A8F500]">src/detection</code>, FastAPI backend in <code className="text-[#A8F500]">src/api</code>
-            </span>
-          </div>
-          <span className="text-[#7DDB52] shrink-0">
-            STRICT ZERO PAYLOAD DECRYPTION
-          </span>
         </div>
       </div>
     </section>

@@ -49,10 +49,6 @@ export const Hero: React.FC<HeroProps> = ({ onNavigate }) => {
           <span className="text-[11px] sm:text-xs font-semibold tracking-wider uppercase text-[#A8F500]">
             PASSIVE NETWORK THREAT MONITORING
           </span>
-          <span className="text-[#242452] text-xs">|</span>
-          <span className="text-[11px] sm:text-xs font-mono text-[#A5A5BE]">
-            SIH PS 26145
-          </span>
         </div>
 
         {/* Main Heading */}

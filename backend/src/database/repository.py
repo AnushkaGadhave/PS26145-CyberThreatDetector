@@ -12,7 +12,15 @@ from typing import List, Dict, Any, Optional, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 
-from src.database.models import FlowModel, AlertModel, ModelStatusModel, UserModel, UserSessionModel
+from src.database.models import (
+    FlowModel,
+    AlertModel,
+    ModelStatusModel,
+    UserModel,
+    UserSessionModel,
+    SensorEnrollmentModel,
+    SensorIngestRecordModel,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +36,9 @@ class FlowRepository:
         protocol: Optional[str] = None,
         src_ip: Optional[str] = None,
         dst_ip: Optional[str] = None,
-        traffic_context: Optional[str] = None
+        traffic_context: Optional[str] = None,
+        sensor_id: Optional[str] = None,
+        user_id: Optional[str] = None
     ) -> Tuple[List[FlowModel], int]:
         """Fetch paginated flow records with optional filtering."""
         query = db.query(FlowModel)
@@ -41,6 +51,10 @@ class FlowRepository:
             query = query.filter(FlowModel.dst_ip == dst_ip)
         if traffic_context:
             query = query.filter(FlowModel.traffic_context == traffic_context)
+        if sensor_id:
+            query = query.filter(FlowModel.sensor_id == sensor_id)
+        if user_id:
+            query = query.filter(FlowModel.user_id == user_id)
 
         total = query.count()
         flows = query.order_by(FlowModel.timestamp.desc()).offset(offset).limit(limit).all()
@@ -86,7 +100,9 @@ class AlertRepository:
         detector: Optional[str] = None,
         traffic_context: Optional[str] = None,
         start_time: Optional[float] = None,
-        end_time: Optional[float] = None
+        end_time: Optional[float] = None,
+        sensor_id: Optional[str] = None,
+        user_id: Optional[str] = None
     ) -> Tuple[List[AlertModel], int]:
         """Fetch paginated alerts ordered newest first."""
         query = db.query(AlertModel)
@@ -103,6 +119,10 @@ class AlertRepository:
             query = query.filter(AlertModel.timestamp >= start_time)
         if end_time is not None:
             query = query.filter(AlertModel.timestamp <= end_time)
+        if sensor_id:
+            query = query.filter(AlertModel.sensor_id == sensor_id)
+        if user_id:
+            query = query.filter(AlertModel.user_id == user_id)
 
         total = query.count()
         alerts = query.order_by(AlertModel.timestamp.desc()).offset(offset).limit(limit).all()
@@ -114,9 +134,12 @@ class AlertRepository:
         return db.query(AlertModel).filter(AlertModel.alert_id == alert_id).first()
 
     @staticmethod
-    def get_recent_alerts(db: Session, limit: int = 20) -> List[AlertModel]:
+    def get_recent_alerts(db: Session, limit: int = 20, user_id: Optional[str] = None) -> List[AlertModel]:
         """Fetch the most recent alerts for live dashboard polling."""
-        return db.query(AlertModel).order_by(AlertModel.timestamp.desc()).limit(limit).all()
+        query = db.query(AlertModel)
+        if user_id:
+            query = query.filter(AlertModel.user_id == user_id)
+        return query.order_by(AlertModel.timestamp.desc()).limit(limit).all()
 
     @staticmethod
     def create_or_update(db: Session, alert_data: Dict[str, Any]) -> AlertModel:
@@ -182,26 +205,32 @@ class DashboardRepository:
     """Repository for aggregated metrics and dashboard overviews."""
 
     @staticmethod
-    def get_alert_summary(db: Session) -> Dict[str, Any]:
-        """Aggregates alert totals, severity counts, and threat class metrics."""
-        total_alerts = db.query(AlertModel).count()
-        total_flows = db.query(FlowModel).count()
+    def get_alert_summary(db: Session, user_id: Optional[str] = None) -> Dict[str, Any]:
+        """Aggregates alert totals, severity counts, and threat class metrics scoped to a user."""
+        alert_query = db.query(AlertModel)
+        flow_query = db.query(FlowModel)
+        if user_id:
+            alert_query = alert_query.filter(AlertModel.user_id == user_id)
+            flow_query = flow_query.filter(FlowModel.user_id == user_id)
+
+        total_alerts = alert_query.count()
+        total_flows = flow_query.count()
 
         # Severity breakdown
         sev_counts = dict(
-            db.query(AlertModel.severity, func.count(AlertModel.id))
+            alert_query.with_entities(AlertModel.severity, func.count(AlertModel.id))
             .group_by(AlertModel.severity)
             .all()
         )
 
         # Threat class breakdown
         tc_counts = dict(
-            db.query(AlertModel.threat_class, func.count(AlertModel.id))
+            alert_query.with_entities(AlertModel.threat_class, func.count(AlertModel.id))
             .group_by(AlertModel.threat_class)
             .all()
         )
 
-        unlabeled_count = db.query(AlertModel).filter(AlertModel.traffic_context == "UNLABELED_LIVE").count()
+        unlabeled_count = alert_query.filter(AlertModel.traffic_context == "UNLABELED_LIVE").count()
 
         return {
             "total_alerts": total_alerts,
@@ -219,37 +248,44 @@ class DashboardRepository:
         }
 
     @staticmethod
-    def get_overview(db: Session) -> Dict[str, Any]:
-        """Generates comprehensive dashboard overview telemetry."""
-        total_flows = db.query(FlowModel).count()
-        total_alerts = db.query(AlertModel).count()
+    def get_overview(db: Session, user_id: Optional[str] = None) -> Dict[str, Any]:
+        """Generates comprehensive dashboard overview telemetry scoped to the requesting user."""
+        flow_query = db.query(FlowModel)
+        alert_query = db.query(AlertModel)
+
+        if user_id:
+            flow_query = flow_query.filter(FlowModel.user_id == user_id)
+            alert_query = alert_query.filter(AlertModel.user_id == user_id)
+
+        total_flows = flow_query.count()
+        total_alerts = alert_query.count()
 
         # In live capture replay, calculate relative to latest alert timestamp if present
-        latest_alert = db.query(AlertModel).order_by(AlertModel.timestamp.desc()).first()
+        latest_alert = alert_query.order_by(AlertModel.timestamp.desc()).first()
         now_ts = latest_alert.timestamp if latest_alert else time.time()
 
-        alerts_5m = db.query(AlertModel).filter(AlertModel.timestamp >= (now_ts - 300)).count()
-        alerts_15m = db.query(AlertModel).filter(AlertModel.timestamp >= (now_ts - 900)).count()
-        alerts_24h = db.query(AlertModel).filter(AlertModel.timestamp >= (now_ts - 86400)).count()
+        alerts_5m = alert_query.filter(AlertModel.timestamp >= (now_ts - 300)).count()
+        alerts_15m = alert_query.filter(AlertModel.timestamp >= (now_ts - 900)).count()
+        alerts_24h = alert_query.filter(AlertModel.timestamp >= (now_ts - 86400)).count()
 
         # Severity breakdown
         sev_counts = {
             "CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "BENIGN": 0
         }
-        for sev, count in db.query(AlertModel.severity, func.count(AlertModel.id)).group_by(AlertModel.severity).all():
+        for sev, count in alert_query.with_entities(AlertModel.severity, func.count(AlertModel.id)).group_by(AlertModel.severity).all():
             sev_counts[sev] = count
 
         # Threat breakdown
         threat_counts = {
             "DDoS": 0, "BOTNET_C2": 0, "RECON_PORTSCAN": 0, "MULTI_THREAT": 0, "BENIGN": 0
         }
-        for tc, count in db.query(AlertModel.threat_class, func.count(AlertModel.id)).group_by(AlertModel.threat_class).all():
+        for tc, count in alert_query.with_entities(AlertModel.threat_class, func.count(AlertModel.id)).group_by(AlertModel.threat_class).all():
             threat_counts[tc] = count
 
         # Top 5 Source IPs
         top_src = [
             {"ip": ip, "count": cnt}
-            for ip, cnt in db.query(FlowModel.src_ip, func.count(FlowModel.id))
+            for ip, cnt in flow_query.with_entities(FlowModel.src_ip, func.count(FlowModel.id))
             .group_by(FlowModel.src_ip)
             .order_by(desc(func.count(FlowModel.id)))
             .limit(5)
@@ -259,7 +295,7 @@ class DashboardRepository:
         # Top 5 Destination IPs
         top_dst = [
             {"ip": ip, "count": cnt}
-            for ip, cnt in db.query(FlowModel.dst_ip, func.count(FlowModel.id))
+            for ip, cnt in flow_query.with_entities(FlowModel.dst_ip, func.count(FlowModel.id))
             .group_by(FlowModel.dst_ip)
             .order_by(desc(func.count(FlowModel.id)))
             .limit(5)
@@ -268,7 +304,7 @@ class DashboardRepository:
 
         # Protocol Breakdown
         proto_counts = dict(
-            db.query(FlowModel.protocol, func.count(FlowModel.id))
+            flow_query.with_entities(FlowModel.protocol, func.count(FlowModel.id))
             .group_by(FlowModel.protocol)
             .all()
         )
@@ -421,3 +457,194 @@ class UserSessionRepository:
         ).update({"is_revoked": True})
         db.commit()
         return count
+
+
+class SensorEnrollmentRepository:
+    """Repository for managing enrolled Windows sensors, API key hashes, and telemetry."""
+
+    @staticmethod
+    def get_by_sensor_id(db: Session, sensor_id: str) -> Optional[SensorEnrollmentModel]:
+        """Lookup sensor by unique sensor_id."""
+        return db.query(SensorEnrollmentModel).filter(SensorEnrollmentModel.sensor_id == sensor_id).first()
+
+    @staticmethod
+    def get_by_api_key_hash(db: Session, key_hash: str) -> Optional[SensorEnrollmentModel]:
+        """Lookup sensor by SHA-256 API key hash."""
+        return db.query(SensorEnrollmentModel).filter(SensorEnrollmentModel.api_key_hash == key_hash).first()
+
+    @staticmethod
+    def get_all(db: Session, status: Optional[str] = None) -> List[SensorEnrollmentModel]:
+        """List all enrolled sensors, optionally filtered by status ('ACTIVE', 'REVOKED')."""
+        query = db.query(SensorEnrollmentModel)
+        if status:
+            query = query.filter(SensorEnrollmentModel.status == status)
+        return query.order_by(SensorEnrollmentModel.created_at.desc()).all()
+
+    @staticmethod
+    def get_by_user(
+        db: Session,
+        user_id: Optional[str] = None,
+        owner_email: Optional[str] = None,
+        status: Optional[str] = None
+    ) -> List[SensorEnrollmentModel]:
+        """List enrolled sensors owned by a specific user account."""
+        query = db.query(SensorEnrollmentModel)
+        if user_id and owner_email:
+            query = query.filter(
+                (SensorEnrollmentModel.user_id == user_id) |
+                (SensorEnrollmentModel.owner_email == owner_email)
+            )
+        elif user_id:
+            query = query.filter(SensorEnrollmentModel.user_id == user_id)
+        elif owner_email:
+            query = query.filter(SensorEnrollmentModel.owner_email == owner_email)
+
+        if status:
+            query = query.filter(SensorEnrollmentModel.status == status)
+        return query.order_by(SensorEnrollmentModel.created_at.desc()).all()
+
+    @staticmethod
+    def enroll_sensor(
+        db: Session,
+        sensor_id: str,
+        name: str,
+        api_key_hash: str,
+        api_key_prefix: str,
+        owner_email: str,
+        user_id: Optional[str] = None
+    ) -> SensorEnrollmentModel:
+        """Enroll a new sensor device with its credential hash and owner association."""
+        existing = db.query(SensorEnrollmentModel).filter(SensorEnrollmentModel.sensor_id == sensor_id).first()
+        if existing:
+            existing.name = name
+            existing.api_key_hash = api_key_hash
+            existing.api_key_prefix = api_key_prefix
+            existing.owner_email = owner_email
+            if user_id:
+                existing.user_id = user_id
+            existing.status = "ACTIVE"
+            existing.revoked_at = None
+            db.commit()
+            db.refresh(existing)
+            return existing
+
+        sensor = SensorEnrollmentModel(
+            sensor_id=sensor_id,
+            name=name,
+            api_key_hash=api_key_hash,
+            api_key_prefix=api_key_prefix,
+            owner_email=owner_email,
+            user_id=user_id,
+            status="ACTIVE"
+        )
+        db.add(sensor)
+        db.commit()
+        db.refresh(sensor)
+        return sensor
+
+    @staticmethod
+    def revoke_sensor(db: Session, sensor_id: str) -> bool:
+        """Revoke a sensor's credential to halt further ingestion."""
+        sensor = db.query(SensorEnrollmentModel).filter(SensorEnrollmentModel.sensor_id == sensor_id).first()
+        if sensor:
+            from datetime import datetime, timezone
+            sensor.status = "REVOKED"
+            sensor.revoked_at = datetime.now(timezone.utc)
+            db.commit()
+            return True
+        return False
+
+    @staticmethod
+    def set_target_state(
+        db: Session,
+        sensor_id: str,
+        target_state: str,
+        target_interface: Optional[str] = None
+    ) -> Optional[SensorEnrollmentModel]:
+        """Set target desired operational state ('RUNNING' or 'STOPPED') for remote sensor."""
+        sensor = db.query(SensorEnrollmentModel).filter(SensorEnrollmentModel.sensor_id == sensor_id).first()
+        if not sensor:
+            return None
+        sensor.target_state = target_state
+        if target_interface is not None:
+            sensor.target_interface = target_interface
+        db.commit()
+        db.refresh(sensor)
+        return sensor
+
+    @staticmethod
+    def update_telemetry(
+        db: Session,
+        sensor_id: str,
+        last_ip: Optional[str] = None,
+        sensor_version: Optional[str] = None,
+        hostname: Optional[str] = None,
+        new_packets: int = 0,
+        new_flows: int = 0,
+        new_alerts: int = 0,
+        actual_state: Optional[str] = None
+    ) -> Optional[SensorEnrollmentModel]:
+        """Update operational telemetry, actual state, and last-seen heartbeat for an active sensor."""
+        sensor = db.query(SensorEnrollmentModel).filter(SensorEnrollmentModel.sensor_id == sensor_id).first()
+        if not sensor:
+            return None
+
+        from datetime import datetime, timezone
+        sensor.last_seen_at = datetime.now(timezone.utc)
+        if last_ip:
+            sensor.last_ip = last_ip
+        if sensor_version:
+            sensor.sensor_version = sensor_version
+        if hostname:
+            sensor.hostname = hostname
+        if actual_state:
+            sensor.actual_state = actual_state
+
+        sensor.packets_uploaded += max(0, new_packets)
+        sensor.flows_uploaded += max(0, new_flows)
+        sensor.alerts_uploaded += max(0, new_alerts)
+
+        db.commit()
+        db.refresh(sensor)
+        return sensor
+
+
+class SensorIngestRepository:
+    """Repository for managing idempotency and deduplication of ingested records."""
+
+    @staticmethod
+    def is_duplicate(db: Session, sensor_id: str, record_id: str) -> bool:
+        """Check if a record has already been ingested from this sensor."""
+        return db.query(SensorIngestRecordModel).filter(
+            SensorIngestRecordModel.sensor_id == sensor_id,
+            SensorIngestRecordModel.record_id == record_id
+        ).first() is not None
+
+    @staticmethod
+    def record_ingestion(db: Session, sensor_id: str, record_id: str, record_type: str) -> bool:
+        """Mark a record as ingested for future idempotency checks."""
+        try:
+            record = SensorIngestRecordModel(
+                sensor_id=sensor_id,
+                record_id=record_id,
+                record_type=record_type
+            )
+            db.add(record)
+            db.commit()
+            return True
+        except Exception as e:
+            db.rollback()
+            logger.warning(f"Failed to record ingest idempotency: {e}")
+            return False
+
+    @staticmethod
+    def get_recent_ingest_records(
+        db: Session,
+        sensor_id: Optional[str] = None,
+        limit: int = 50
+    ) -> List[SensorIngestRecordModel]:
+        """Retrieve recent ingestion audit records."""
+        query = db.query(SensorIngestRecordModel)
+        if sensor_id:
+            query = query.filter(SensorIngestRecordModel.sensor_id == sensor_id)
+        return query.order_by(SensorIngestRecordModel.ingested_at.desc()).limit(limit).all()

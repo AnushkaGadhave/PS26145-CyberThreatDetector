@@ -99,11 +99,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {!collapsed && (
               <div className="flex flex-col">
                 <span className="font-heading font-extrabold text-base tracking-tight text-[#F5F5F7] flex items-center gap-1.5">
-                  NETRA
+                  ThreatTrack
                   <span className="w-1.5 h-1.5 rounded-full bg-[#A8F500]" />
                 </span>
                 <span className="text-[10px] font-mono text-[#A5A5BE]">
-                  PS 26145 Console
+                  Security Console
                 </span>
               </div>
             )}

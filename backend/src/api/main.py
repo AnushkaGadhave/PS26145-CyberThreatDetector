@@ -42,6 +42,7 @@ from src.api.routes_dashboard import router as dashboard_router
 from src.api.routes_capture import router as capture_router
 from src.api.routes_auth import router as auth_router
 from src.api.routes_reports import router as reports_router
+from src.api.routes_sensor import router as sensor_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -83,26 +84,30 @@ app = FastAPI(
 )
 
 # CORS Configuration
-# Restricts cross-origin requests to configured local frontend URLs
+# Supports explicit CORS_ORIGINS as well as Vercel preview URLs via CORS_ORIGIN_REGEX
 raw_cors_origins = os.getenv(
     "CORS_ORIGINS",
     "http://localhost:5174,http://127.0.0.1:5174,http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000"
 )
 origins = [o.strip() for o in raw_cors_origins.split(",") if o.strip()]
 
-# Explicitly ensure exact local development origins are permitted (including Vite port 5174)
-for dev_origin in ["http://localhost:5174", "http://127.0.0.1:5174"]:
+# Explicitly ensure exact local development origins are permitted
+for dev_origin in ["http://localhost:5174", "http://127.0.0.1:5174", "http://localhost:5173", "http://127.0.0.1:5173"]:
     if dev_origin not in origins:
         origins.append(dev_origin)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],  # Support Read-Only GET, Administrative POST, and Preflight OPTIONS
-    allow_headers=["*"],
-    expose_headers=["Content-Disposition"],
-)
+cors_kwargs = {
+    "allow_origins": origins,
+    "allow_credentials": True,
+    "allow_methods": ["*"],
+    "allow_headers": ["*"],
+    "expose_headers": ["Content-Disposition"],
+}
+origin_regex = os.getenv("CORS_ORIGIN_REGEX", r"https://.*\.vercel\.app")
+if origin_regex:
+    cors_kwargs["allow_origin_regex"] = origin_regex
+
+app.add_middleware(CORSMiddleware, **cors_kwargs)
 
 
 @app.get(
@@ -125,6 +130,7 @@ app.include_router(alerts_router)
 app.include_router(models_router)
 app.include_router(dashboard_router)
 app.include_router(capture_router)
+app.include_router(sensor_router)
 
 
 # Global Exception Handlers
@@ -135,3 +141,13 @@ async def global_exception_handler(request: Request, exc: Exception):
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": "Internal server error occurred. Check server logs."}
     )
+
+
+if __name__ == "__main__":
+    import uvicorn
+    # Supports hosting platform's PORT environment variable (e.g. Render)
+    # Binds to 0.0.0.0 when PORT or API_HOST is configured, falling back to 127.0.0.1 for local testing
+    default_host = "0.0.0.0" if os.getenv("PORT") else "127.0.0.1"
+    host = os.getenv("API_HOST", default_host)
+    port = int(os.getenv("PORT", os.getenv("API_PORT", "8000")))
+    uvicorn.run("src.api.main:app", host=host, port=port, proxy_headers=True)

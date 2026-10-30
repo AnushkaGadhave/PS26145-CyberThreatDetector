@@ -409,9 +409,9 @@ export const AlertsPage: React.FC<AlertsPageProps> = ({
                 <tr>
                   <td colSpan={9} className="py-16 text-center text-[#A5A5BE] font-mono">
                     <AlertTriangle className="w-8 h-8 text-[#39D7FF] mx-auto mb-2 opacity-50" />
-                    <p className="text-sm font-semibold text-[#F5F5F7]">No threat alerts generated yet</p>
+                    <p className="text-sm font-semibold text-[#F5F5F7]">No alerts detected in this period</p>
                     <p className="text-xs text-[#A5A5BE] mt-1 max-w-md mx-auto">
-                      Real-time passive monitoring has not flagged any malicious anomalies. Alerts will appear here when suspicious flow patterns trigger the ML detectors.
+                      No suspicious flow patterns have triggered alert thresholds.
                     </p>
                   </td>
                 </tr>

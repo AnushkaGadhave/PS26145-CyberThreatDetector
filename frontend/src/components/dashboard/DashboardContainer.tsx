@@ -300,19 +300,19 @@ export const DashboardContainer: React.FC<DashboardContainerProps> = ({
   const getPageInfo = () => {
     switch (currentTab) {
       case 'live-monitor':
-        return { title: 'Live Ingress Telemetry', breadcrumbs: ['NETRA', 'Live Monitor'] };
+        return { title: 'Live Monitor', breadcrumbs: ['ThreatTrack', 'Live Monitor'] };
       case 'alerts':
-        return { title: 'Threat Alert Management', breadcrumbs: ['NETRA', 'Threat Alerts'] };
+        return { title: 'Threat Alert Management', breadcrumbs: ['ThreatTrack', 'Threat Alerts'] };
       case 'flows':
-        return { title: 'Network Flow Explorer', breadcrumbs: ['NETRA', 'Network Flows'] };
+        return { title: 'Network Flow Explorer', breadcrumbs: ['ThreatTrack', 'Network Flows'] };
       case 'models':
-        return { title: 'Detection Components & Metrics', breadcrumbs: ['NETRA', 'Detection Models'] };
+        return { title: 'Detection Components & Metrics', breadcrumbs: ['ThreatTrack', 'Detection Models'] };
       case 'reports':
-        return { title: 'Executive Reports & Analytics', breadcrumbs: ['NETRA', 'Reports & Analytics'] };
+        return { title: 'Executive Reports & Analytics', breadcrumbs: ['ThreatTrack', 'Reports & Analytics'] };
       case 'not-found':
-        return { title: 'Navigation Notice', breadcrumbs: ['NETRA', 'Unknown Route'] };
+        return { title: 'Navigation Notice', breadcrumbs: ['ThreatTrack', 'Unknown Route'] };
       default:
-        return { title: 'Operational Security Overview', breadcrumbs: ['NETRA', 'Overview'] };
+        return { title: 'Operational Security Overview', breadcrumbs: ['ThreatTrack', 'Overview'] };
     }
   };
 

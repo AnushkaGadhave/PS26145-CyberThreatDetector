@@ -329,6 +329,112 @@ class TestFalsePositiveCalibration(unittest.TestCase):
         self.assertEqual(df_c2.iloc[0]['IAT_Regularity_Causal'], 0.0)
         self.assertEqual(df_c2.iloc[0]['RepeatRatio_SrcDst_Causal'], 0.0)
 
+    def test_11_c2_safety_guard_short_tcp_web_suppression(self):
+        """11. Verify evaluate_c2_safety_guard suppresses false C2 on short TCP web transactions lacking beaconing."""
+        from src.sensor.safety import evaluate_c2_safety_guard
+
+        # Ordinary short HTTPS transaction (4 pkts, 242 bytes, 3 observations, weak regularity)
+        pred, score, note = evaluate_c2_safety_guard(
+            c2_prediction=1,
+            c2_score=0.95,
+            src_ip="192.168.0.110",
+            dst_ip="172.217.115.4",
+            dst_port=443,
+            protocol="TCP",
+            total_packets=4,
+            total_bytes=242,
+            iat_regularity=0.55,
+            obs_count=3,
+            repeat_ratio=0.25
+        )
+        self.assertEqual(pred, 0)
+        self.assertLess(score, 0.50)
+        self.assertIsNotNone(note)
+        self.assertIn("Short TCP web transaction suppressed", note)
+
+    def test_12_c2_safety_guard_preserves_real_beaconing_and_payload(self):
+        """12. Verify evaluate_c2_safety_guard does NOT suppress true C2 beaconing or substantial payload over port 443."""
+        from src.sensor.safety import evaluate_c2_safety_guard
+
+        # True beaconing over 443 (6 repeated flows, 0.88 regularity)
+        pred, score, note = evaluate_c2_safety_guard(
+            c2_prediction=1,
+            c2_score=0.95,
+            src_ip="192.168.0.110",
+            dst_ip="198.51.100.22",
+            dst_port=443,
+            protocol="TCP",
+            total_packets=4,
+            total_bytes=242,
+            iat_regularity=0.88,
+            obs_count=6,
+            repeat_ratio=0.80
+        )
+        self.assertEqual(pred, 1)
+        self.assertEqual(score, 0.95)
+        self.assertIsNone(note)
+
+        # Real payload transfer over 443 (e.g. 5,000 bytes)
+        pred_pay, score_pay, note_pay = evaluate_c2_safety_guard(
+            c2_prediction=1,
+            c2_score=0.90,
+            src_ip="192.168.0.110",
+            dst_ip="198.51.100.22",
+            dst_port=443,
+            protocol="TCP",
+            total_packets=25,
+            total_bytes=5000,
+            iat_regularity=0.40,
+            obs_count=2,
+            repeat_ratio=0.20
+        )
+        self.assertEqual(pred_pay, 1)
+        self.assertEqual(score_pay, 0.90)
+        self.assertIsNone(note_pay)
+
+    def test_13_c2_anomaly_score_not_calibrated_probability(self):
+        """13. Verify C2 uncalibrated anomaly score does not escalate to HIGH/CRITICAL without high confidence band."""
+        # Uncalibrated anomaly with LOW_CONFIDENCE
+        result_uncalibrated = DetectorResult(
+            detector="HybridPCA_Botnet_C2",
+            threat_class="BOTNET_C2",
+            prediction=1,
+            score=0.92,
+            confidence=None,  # PCA anomaly score, not a probability
+            confidence_band="LOW_CONFIDENCE",
+            compatible="FULLY_COMPATIBLE",
+            status="READY",
+            reason="Uncalibrated PCA anomaly"
+        )
+        alert = self.engine.evaluate_detector_results(self.sample_flow, [result_uncalibrated], traffic_context="UNLABELED_LIVE")
+        self.assertIsNotNone(alert)
+        self.assertEqual(alert.threat_class, "BOTNET_C2")
+        self.assertEqual(alert.severity, "LOW")
+        self.assertEqual(alert.confidence_band, "LOW_CONFIDENCE")
+
+    def test_14_c2_safety_guard_inbound_first_web_flow(self):
+        """14. Verify evaluate_c2_safety_guard suppresses false C2 on inbound-first HTTPS CDN traffic (e.g. 104.18.39.21:443 -> 192.168.0.110:59762)."""
+        from src.sensor.safety import evaluate_c2_safety_guard
+
+        pred, score, note = evaluate_c2_safety_guard(
+            c2_prediction=1,
+            c2_score=0.92,
+            src_ip="104.18.39.21",
+            dst_ip="192.168.0.110",
+            src_port=443,
+            dst_port=59762,
+            protocol="TCP",
+            total_packets=6,
+            total_bytes=428,
+            iat_regularity=0.45,
+            obs_count=3,
+            repeat_ratio=0.30
+        )
+        self.assertEqual(pred, 0)
+        self.assertLess(score, 0.50)
+        self.assertIsNotNone(note)
+        self.assertIn("Short TCP web transaction suppressed", note)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

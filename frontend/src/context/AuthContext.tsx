@@ -6,6 +6,7 @@ interface AuthContextType {
   isAuthenticated: boolean;
   isAuthLoading: boolean;
   login: (credentials: { email: string; password: string }) => Promise<UserProfile>;
+  register: (data: { full_name: string; email: string; password: string }) => Promise<UserProfile>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
 }
@@ -59,6 +60,25 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
+  const register = async (data: { full_name: string; email: string; password: string }): Promise<UserProfile> => {
+    const seq = ++requestSeqRef.current;
+    setIsAuthLoading(true);
+    try {
+      const res = await api.register(data);
+      if (seq === requestSeqRef.current) {
+        setUser(res.user);
+        setIsAuthLoading(false);
+      }
+      return res.user;
+    } catch (err) {
+      if (seq === requestSeqRef.current) {
+        setUser(null);
+        setIsAuthLoading(false);
+      }
+      throw err;
+    }
+  };
+
   const logout = async () => {
     ++requestSeqRef.current;
     setUser(null);
@@ -77,6 +97,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         isAuthenticated: !!user,
         isAuthLoading,
         login,
+        register,
         logout,
         refreshUser,
       }}

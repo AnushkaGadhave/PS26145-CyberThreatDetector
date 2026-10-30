@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from src.database.database import get_db
+from src.database.models import UserModel
 from src.database.schemas import DashboardOverviewResponse
 from src.database.repository import DashboardRepository
 from src.auth.dependencies import get_current_user
@@ -29,10 +30,12 @@ router = APIRouter(
     description="Retrieve a complete snapshot of network flow totals, alert velocity, severity distributions, top communicators, and model health."
 )
 def get_dashboard_overview(
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
     try:
-        overview_data = DashboardRepository.get_overview(db=db)
+        user_id_filter = None if current_user.role == "admin" else current_user.user_id
+        overview_data = DashboardRepository.get_overview(db=db, user_id=user_id_filter)
         return DashboardOverviewResponse(**overview_data)
     except Exception as e:
         raise HTTPException(

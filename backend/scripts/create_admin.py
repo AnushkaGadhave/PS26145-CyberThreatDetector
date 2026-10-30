@@ -141,7 +141,7 @@ def create_or_update_admin(email: str, name: str, password: str, force: bool = F
 
 def main():
     parser = argparse.ArgumentParser(
-        description="NETRA Administrator Account Bootstrap Tool (SIH PS 26145)"
+        description="ThreatTrack Administrator Account Bootstrap Tool (SIH PS 26145)"
     )
     parser.add_argument("--email", help="Administrator work email (e.g. admin@soc.gov.in)")
     parser.add_argument("--name", help="Administrator full name (e.g. SOC Lead)")
@@ -151,7 +151,7 @@ def main():
     args = parser.parse_args()
 
     print("======================================================================")
-    print("   NETRA SENSOR — ADMINISTRATOR PROVISIONING TOOL (SIH PS 26145)")
+    print("   THREATTRACK SENSOR — ADMINISTRATOR PROVISIONING TOOL (SIH PS 26145)")
     print("======================================================================")
 
     # 1. Determine Email

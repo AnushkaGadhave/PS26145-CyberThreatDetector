@@ -35,6 +35,7 @@ from src.sensor.metadata_queue import LocalMetadataQueue, MetadataRecord
 from src.sensor.feature_validator import FeatureValidator
 from src.sensor.safety import (
     evaluate_multicast_discovery_safety,
+    evaluate_c2_safety_guard,
     prevent_c2_multicast_misclassification,
     is_established_web_flow
 )
@@ -127,6 +128,29 @@ class WindowsSensor:
 
         # Ring buffer of recent flow events for live monitoring
         self.recent_events: deque = deque(maxlen=50)
+
+        # Outbound Telemetry Transmitter
+        self.transmitter = None
+        if self.config.enable_remote_transmission and self.config.sensor_api_key:
+            try:
+                from src.sensor.transmitter import SensorTransmitter, TransmitterConfig
+                t_cfg = TransmitterConfig(
+                    backend_url=self.config.remote_backend_url,
+                    api_key=self.config.sensor_api_key,
+                    sensor_id=self.config.sensor_id,
+                    sensor_version=self.config.sensor_version,
+                    batch_size=self.config.transmission_batch_size,
+                    flush_interval=self.config.transmission_interval,
+                    enable_transmission=True
+                )
+                self.transmitter = SensorTransmitter(
+                    self.metadata_queue,
+                    t_cfg,
+                    status_provider=lambda: self.status,
+                    command_handler=self._handle_remote_command
+                )
+            except Exception as t_err:
+                logger.warning(f"Failed to initialize remote transmitter: {t_err}")
 
         # Callbacks
         self.flow_callbacks: List[Callable[[FlowRecord], None]] = []
@@ -245,8 +269,10 @@ class WindowsSensor:
             try:
                 self._thread.start()
                 self.status = "RUNNING"
+                if self.transmitter:
+                    self.transmitter.start()
                 logger.info(
-                    f"NETRA Local Windows Sensor active on interface '{self.actual_interface}'. "
+                    f"ThreatTrack Local Windows Sensor active on interface '{self.actual_interface}'. "
                     f"Passive read-only capture initiated."
                 )
                 return {
@@ -267,12 +293,27 @@ class WindowsSensor:
                     "status": self.status
                 }
 
-    def stop(self) -> Dict[str, Any]:
+    def _handle_remote_command(self, command: str, target_interface: Optional[str] = None):
+        """Dispatch remote control commands issued from the web dashboard."""
+        if not command:
+            return
+        cmd_upper = command.upper()
+        if cmd_upper in ("START", "RUNNING") and self.status == "STOPPED":
+            logger.info(f"[REMOTE COMMAND] Received START command from dashboard for interface '{target_interface or 'default'}'")
+            self.start(target_interface)
+        elif cmd_upper in ("STOP", "STOPPED") and self.status in ("RUNNING", "STARTING"):
+            logger.info("[REMOTE COMMAND] Received STOP command from dashboard. Halting sniffer.")
+            self.stop(stop_transmitter=False)
+
+    def stop(self, stop_transmitter: bool = False) -> Dict[str, Any]:
         """
         Gracefully stops live packet capture and finalizes all active flows.
+        Keeps transmitter alive by default so remote START commands can still be received.
         """
         with self._lock:
             if self.status not in ("RUNNING", "STARTING"):
+                if stop_transmitter and self.transmitter:
+                    self.transmitter.stop()
                 return {
                     "success": True,
                     "message": f"Sensor is already {self.status}.",
@@ -283,7 +324,7 @@ class WindowsSensor:
 
             self.status = "STOPPING"
             self.stop_time = time.time()
-            logger.info("Stopping NETRA Windows Sensor worker...")
+            logger.info("Stopping ThreatTrack Windows Sensor worker...")
 
         # Signal sniffer loop to exit
         self._stop_event.set()
@@ -299,11 +340,18 @@ class WindowsSensor:
             except Exception as flush_err:
                 logger.error(f"Error flushing flow builder: {flush_err}")
 
+        # Stop outbound transmitter if explicitly requested
+        if stop_transmitter and self.transmitter:
+            try:
+                self.transmitter.stop()
+            except Exception as t_stop_err:
+                logger.error(f"Error stopping transmitter: {t_stop_err}")
+
         with self._lock:
             self.status = "STOPPED"
             duration = round((self.stop_time or time.time()) - (self.start_time or time.time()), 2)
             logger.info(
-                f"NETRA Sensor stopped cleanly. Uptime: {duration}s | "
+                f"ThreatTrack Sensor stopped cleanly. Uptime: {duration}s | "
                 f"Packets: {self.packets_captured} | Flows: {self.flows_completed} | "
                 f"Threats: {self.threats_detected} | Queued: {self.metadata_queue.enqueued_count}"
             )
@@ -320,9 +368,13 @@ class WindowsSensor:
                 "queued_records": self.metadata_queue.qsize()
             }
 
+    def shutdown(self):
+        """Full shutdown of both packet sniffer and outbound telemetry transmitter."""
+        return self.stop(stop_transmitter=True)
+
     def restart(self, requested_interface: Optional[str] = None) -> Dict[str, Any]:
         """Gracefully stops and restarts the sensor."""
-        self.stop()
+        self.stop(stop_transmitter=False)
         time.sleep(0.5)
         return self.start(requested_interface)
 
@@ -463,20 +515,31 @@ class WindowsSensor:
                                 f"({flow.src_ip} -> {flow.dst_ip}:{flow.dst_port}) - {discovery_reason}"
                             )
                             generated_alert = None
-                        elif (flow.protocol or "").upper() == "UDP" and flow.dst_port == 443:
-                            # Standard QUIC web traffic: suppress unless proven beaconing regularity exists
+                        else:
                             c2_feats = self.adapter.to_c2_dataframe(flow).iloc[0].to_dict()
                             iat_reg = c2_feats.get('IAT_Regularity_Causal', 0.0)
                             obs = c2_feats.get('SrcDst_Flows_BeforeOrAtT', 0)
-                            if obs < 3 or iat_reg < 0.5:
-                                logger.info(
-                                    f"[SAFETY] Suppressed false C2 alert on standard QUIC web egress: "
-                                    f"{flow.src_ip} -> {flow.dst_ip}:{flow.dst_port} (obs={obs}, reg={iat_reg:.2f})"
-                                )
+                            rep = c2_feats.get('RepeatRatio_SrcDst_Causal', 0.0)
+                            _, _, note = evaluate_c2_safety_guard(
+                                c2_prediction=1,
+                                c2_score=generated_alert.confidence or 0.5,
+                                src_ip=flow.src_ip,
+                                dst_ip=flow.dst_ip,
+                                dst_port=flow.dst_port,
+                                protocol=flow.protocol,
+                                total_packets=flow.total_packets,
+                                total_bytes=flow.total_bytes,
+                                iat_regularity=iat_reg,
+                                obs_count=obs,
+                                repeat_ratio=rep,
+                                src_port=flow.src_port
+                            )
+                            if note:
+                                logger.info(f"[SAFETY] Suppressed C2 alert on flow {flow.flow_id}: {note}")
                                 generated_alert = None
                     elif generated_alert.threat_class == "RECON_PORTSCAN":
                         # Prevent misclassification of established HTTPS sessions or local broadcast/discovery as PortScan
-                        if is_established_web_flow(flow.protocol, flow.dst_port, flow.total_packets, flow.total_bytes, flow.ack_count):
+                        if is_established_web_flow(flow.protocol, flow.dst_port, flow.total_packets, flow.total_bytes, flow.ack_count, src_port=flow.src_port):
                             logger.info(
                                 f"[SAFETY] Suppressed false PortScan alert on established web flow {flow.flow_id} "
                                 f"({flow.src_ip} -> {flow.dst_ip}:{flow.dst_port}, {flow.total_packets} pkts, {flow.total_bytes} bytes)"
@@ -655,7 +718,10 @@ class WindowsSensor:
             "queue_pending": queue_stats.get("pending_queue_size", 0),
             "queue_enqueued": queue_stats.get("enqueued_total", 0),
             "queue_dropped": queue_stats.get("dropped_total", 0),
-            "queue_spool_size_bytes": queue_stats.get("spool_file_size_bytes", 0)
+            "queue_spool_size_bytes": queue_stats.get("spool_file_size_bytes", 0),
+
+            # Outbound Cloud Transmitter Metrics
+            "transmitter": self.transmitter.get_status() if self.transmitter else None
         }
 
     def get_recent_events(self, limit: int = 30) -> List[Dict[str, Any]]:

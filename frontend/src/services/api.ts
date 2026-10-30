@@ -31,13 +31,24 @@ export interface CaptureInterface {
   name: string;
   description: string;
   ip: string;
-  mac: string;
+  ips?: string[];
+  mac?: string;
   is_active: boolean;
+  is_wireless?: boolean;
+  is_loopback?: boolean;
 }
 
 export interface CaptureStatus {
-  state: 'ACTIVE' | 'STOPPED' | 'ERROR';
+  state: 'ACTIVE' | 'STOPPED' | 'ERROR' | 'STANDBY';
+  status?: string;
+  diagnostic_state?: 'SENSOR_NOT_INSTALLED' | 'SENSOR_OFFLINE' | 'PERMISSION_REQUIRED' | 'INTERFACE_UNAVAILABLE' | 'RUNNING_NO_PACKETS' | 'ACTIVE' | 'STANDBY' | 'OCCUPIED_BY_ANOTHER_USER' | 'ERROR';
+  sensor_installed?: boolean;
+  is_owner?: boolean;
+  busy_by_other_user?: boolean;
+  is_local_client?: boolean;
+  message?: string;
   interface: string | null;
+  configured_interface?: string | null;
   packets_captured: number;
   packets_dropped: number;
   flows_created: number;
@@ -46,6 +57,7 @@ export interface CaptureStatus {
   current_pps: number;
   current_kbps: number;
   error_message: string | null;
+  uptime_seconds?: number;
 }
 
 export interface FlowListResponse {
@@ -118,17 +130,21 @@ export interface LiveStreamEventItem {
   threat_outcome: string;
   severity: string;
   alert_id?: string;
+  sensor_id?: string;
+  source?: string;
 }
 
 async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const baseUrl = getApiBaseUrl();
   const url = `${baseUrl}${endpoint}`;
+  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('threattrack_token') : null;
   try {
     const response = await fetch(url, {
       ...options,
       credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
         ...options?.headers,
       },
     });
@@ -272,16 +288,35 @@ export const api = {
     return request(`/api/capture/events?limit=${limit}`);
   },
 
+  /** Register a new user account */
+  async register(data: { full_name: string; email: string; password: string }): Promise<LoginResponse> {
+    const res = await request<LoginResponse>('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    if (res.token && typeof localStorage !== 'undefined') {
+      localStorage.setItem('threattrack_token', res.token);
+    }
+    return res;
+  },
+
   /** Authenticate operator credentials */
   async login(credentials: { email: string; password: string }): Promise<LoginResponse> {
-    return request('/api/auth/login', {
+    const res = await request<LoginResponse>('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify(credentials),
     });
+    if (res.token && typeof localStorage !== 'undefined') {
+      localStorage.setItem('threattrack_token', res.token);
+    }
+    return res;
   },
 
   /** Terminate operator session */
   async logout(): Promise<{ success: boolean; message: string }> {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem('threattrack_token');
+    }
     return request('/api/auth/logout', {
       method: 'POST',
       body: JSON.stringify({}),
@@ -310,9 +345,13 @@ export const api = {
 
     const baseUrl = getApiBaseUrl();
     const url = `${baseUrl}/api/reports/export?${q.toString()}`;
+    const token = typeof localStorage !== 'undefined' ? localStorage.getItem('threattrack_token') : null;
     const response = await fetch(url, {
       method: 'GET',
       credentials: 'include',
+      headers: {
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+      },
     });
 
     if (!response.ok) {
@@ -359,7 +398,7 @@ export const api = {
         models: 'Model_Audit'
       };
       const prefix = prefixMap[params.reportType || 'comprehensive'] || 'Security_Report';
-      filename = `NETRA_${prefix}_${timestamp}.${ext}`;
+      filename = `ThreatTrack_${prefix}_${timestamp}.${ext}`;
     }
 
     // Ensure filesystem-safe filename
@@ -368,7 +407,117 @@ export const api = {
     const blob = await response.blob();
     return { filename, blob };
   },
+
+  /** Retrieve all enrolled remote sensor devices */
+  async getEnrolledSensors(status?: string): Promise<EnrolledSensor[]> {
+    return request(`/api/sensor/list${status ? `?status=${encodeURIComponent(status)}` : ''}`);
+  },
+
+  /** Enroll a new remote Windows sensor device */
+  async enrollSensor(payload: { sensor_id: string; name: string }): Promise<{
+    success: boolean;
+    message: string;
+    sensor: EnrolledSensor;
+    api_key: string;
+  }> {
+    return request('/api/sensor/enroll', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /** Revoke an enrolled sensor credential */
+  async revokeSensor(sensor_id: string): Promise<{ success: boolean; message: string }> {
+    return request('/api/sensor/revoke', {
+      method: 'POST',
+      body: JSON.stringify({ sensor_id }),
+    });
+  },
+
+  /** Retrieve live stream events observed by enrolled remote sensors */
+  async getRemoteSensorEvents(sensor_id?: string, limit: number = 30): Promise<LiveStreamEventItem[]> {
+    const query = new URLSearchParams();
+    if (sensor_id) query.set('sensor_id', sensor_id);
+    query.set('limit', String(limit));
+    return request(`/api/sensor/events?${query.toString()}`);
+  },
+
+  /** Control remote sensor packet capture (START or STOP) */
+  async controlSensor(
+    sensor_id: string,
+    command: 'START' | 'STOP',
+    interfaceName?: string
+  ): Promise<{
+    success: boolean;
+    message: string;
+    sensor_id: string;
+    command: string;
+    target_state: string;
+    actual_state: string;
+  }> {
+    return request(`/api/sensor/${encodeURIComponent(sensor_id)}/control`, {
+      method: 'POST',
+      body: JSON.stringify({ command, interface: interfaceName || null }),
+    });
+  },
+
+  /** Download self-contained Windows sensor agent distribution ZIP */
+  async downloadWindowsSensor(sensorId?: string, apiKey?: string): Promise<{ blob: Blob; filename: string }> {
+    const params = new URLSearchParams();
+    if (sensorId) params.append('sensor_id', sensorId);
+    if (apiKey) params.append('api_key', apiKey);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+
+    const baseUrl = getApiBaseUrl();
+    const token = typeof localStorage !== 'undefined' ? localStorage.getItem('threattrack_token') : null;
+    const res = await fetch(`${baseUrl}/api/sensor/download/windows-agent${qs}`, {
+      method: 'GET',
+      credentials: 'include',
+      headers: {
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+      },
+    });
+
+    if (!res.ok) {
+      let errDetail = 'Failed to download sensor package';
+      try {
+        const json = await res.json();
+        errDetail = json.detail || errDetail;
+      } catch {}
+      throw new Error(errDetail);
+    }
+
+    const blob = await res.blob();
+    const disposition = res.headers.get('Content-Disposition');
+    let filename = sensorId ? `ThreatTrack-Sensor-${sensorId}.zip` : 'ThreatTrack-Windows-Sensor.zip';
+    if (disposition && disposition.includes('filename=')) {
+      const match = disposition.match(/filename="?([^"]+)"?/);
+      if (match && match[1]) filename = match[1];
+    }
+    return { blob, filename };
+  },
 };
+
+export interface EnrolledSensor {
+  id: number;
+  sensor_id: string;
+  name: string;
+  api_key_prefix: string;
+  owner_email: string;
+  status: 'ACTIVE' | 'REVOKED';
+  target_state?: 'RUNNING' | 'STOPPED';
+  actual_state?: string;
+  target_interface?: string | null;
+  last_seen_at: string | null;
+  last_ip: string | null;
+  sensor_version: string | null;
+  hostname: string | null;
+  packets_uploaded: number;
+  flows_uploaded: number;
+  alerts_uploaded: number;
+  created_at: string | null;
+  revoked_at?: string | null;
+}
 
 export interface UserProfile {
   user_id: string;
@@ -384,6 +533,7 @@ export interface LoginResponse {
   success: boolean;
   message: string;
   user: UserProfile;
+  token?: string;
 }
 
 export interface CurrentUserResponse {

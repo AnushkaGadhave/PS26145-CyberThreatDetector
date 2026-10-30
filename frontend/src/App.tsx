@@ -23,6 +23,7 @@ const AppContent: React.FC = () => {
     if (typeof window !== 'undefined') {
       const path = window.location.pathname;
       if (path === '/login') return '/login';
+      if (path === '/signup' || path === '/register') return '/signup';
       if (path.startsWith('/dashboard')) return path;
     }
     return '/';
@@ -33,6 +34,8 @@ const AppContent: React.FC = () => {
       const path = window.location.pathname;
       if (path === '/login') {
         setCurrentRoute('/login');
+      } else if (path === '/signup' || path === '/register') {
+        setCurrentRoute('/signup');
       } else if (path.startsWith('/dashboard')) {
         setCurrentRoute(path);
       } else {
@@ -60,7 +63,7 @@ const AppContent: React.FC = () => {
             Verifying Operator Credentials...
           </p>
           <p className="text-xs text-[#A5A5BE] mt-1 font-sans">
-            Checking authenticated session with NETRA backend console
+            Checking authenticated session with ThreatTrack backend console
           </p>
         </div>
       );
@@ -79,7 +82,15 @@ const AppContent: React.FC = () => {
     if (isAuthenticated) {
       return <DashboardPage onNavigate={navigateTo} currentRoute="/dashboard" />;
     }
-    return <LoginPage onNavigate={navigateTo} />;
+    return <LoginPage onNavigate={navigateTo} initialMode="login" />;
+  }
+
+  // Sign Up Page
+  if (currentRoute === '/signup') {
+    if (isAuthenticated) {
+      return <DashboardPage onNavigate={navigateTo} currentRoute="/dashboard" />;
+    }
+    return <LoginPage onNavigate={navigateTo} initialMode="signup" />;
   }
 
   // Landing Page
@@ -121,7 +132,7 @@ const AppContent: React.FC = () => {
             404 — Page Not Found
           </h1>
           <p className="text-xs text-[#A5A5BE]">
-            The requested URL <code className="text-[#39D7FF]">{currentRoute}</code> does not exist on NETRA Sensor.
+            The requested URL <code className="text-[#39D7FF]">{currentRoute}</code> does not exist on ThreatTrack.
           </p>
           <div className="flex items-center justify-center gap-3 pt-3">
             <button
@@ -147,7 +158,7 @@ const AppContent: React.FC = () => {
 export const App: React.FC = () => {
   return (
     <ErrorBoundary
-      fallbackTitle="NETRA Platform Exception"
+      fallbackTitle="ThreatTrack Platform Exception"
       onReset={() => window.location.href = '/'}
       onNavigateHome={() => window.location.href = '/'}
     >

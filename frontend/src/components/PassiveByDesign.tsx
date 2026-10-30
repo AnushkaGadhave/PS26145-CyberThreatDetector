@@ -10,7 +10,7 @@ export const PassiveByDesign: React.FC = () => {
       icon: EyeOff,
       bullet: 'Zero inline latency',
       description:
-        'NETRA operates entirely via out-of-band SPAN mirrors or passive optical TAPs. No packet injection, blocking, or probing occurs on the monitored wire.',
+        'ThreatTrack operates entirely via out-of-band SPAN mirrors or passive optical TAPs. No packet injection, blocking, or probing occurs on the monitored wire.',
     },
     {
       id: '02',
@@ -45,9 +45,6 @@ export const PassiveByDesign: React.FC = () => {
             OBSERVE WITHOUT<br />
             <span className="text-[#39D7FF]">INTERFERING.</span>
           </h2>
-          <p className="mt-4 text-base sm:text-lg text-[#A5A5BE] font-sans">
-            Guaranteed operational silence and zero footprint across critical enterprise network segments.
-          </p>
         </div>
 
         {/* 3 Clean Horizontal Feature Pillars */}

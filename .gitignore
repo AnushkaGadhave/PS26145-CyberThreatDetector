@@ -74,7 +74,8 @@ backend/data/sensor_queue/
 *.binetflow
 *.zip
 
-# Local SQLite databases, dumps and logs
+# Local database backups, dumps, reports and logs
+backups/
 *.db
 *.sqlite
 *.sqlite3
@@ -97,6 +98,8 @@ htmlcov/
 # IDE & OS
 .vscode/
 .idea/
+scratch/
+**/scratch/
 Thumbs.db
 ehthumbs.db
 Desktop.ini

@@ -92,9 +92,9 @@ def evaluate_multicast_discovery_safety(
     return False, None
 
 
-def is_quic_traffic(dst_port: Optional[int], protocol: str) -> bool:
+def is_quic_traffic(dst_port: Optional[int], protocol: str, src_port: Optional[int] = None) -> bool:
     """Check if connection uses UDP port 443 (standard QUIC / HTTP/3 web traffic)."""
-    return (protocol or "").upper() == "UDP" and dst_port == 443
+    return (protocol or "").upper() == "UDP" and (dst_port == 443 or src_port == 443)
 
 
 def is_established_web_flow(
@@ -102,36 +102,45 @@ def is_established_web_flow(
     dst_port: Optional[int],
     total_packets: int,
     total_bytes: int,
-    ack_count: int = 0
+    ack_count: int = 0,
+    src_port: Optional[int] = None
 ) -> bool:
     """
     Checks if a flow represents an established web session (HTTP/HTTPS) carrying application data,
     which must not be classified as a single-flow port reconnaissance scan.
     """
-    is_web_port = dst_port in (80, 443, 8080, 8443)
+    is_web_port = (dst_port in (80, 443, 8080, 8443)) or (src_port is not None and src_port in (80, 443, 8080, 8443))
     is_tcp = (protocol or "").upper() == "TCP"
     return is_tcp and is_web_port and total_packets >= 5 and total_bytes >= 1000 and ack_count > 0
 
 
-def prevent_c2_multicast_misclassification(
+def evaluate_c2_safety_guard(
     c2_prediction: int,
     c2_score: float,
     src_ip: str,
     dst_ip: str,
     dst_port: Optional[int],
     protocol: str,
+    total_packets: int = 0,
+    total_bytes: int = 0,
     iat_regularity: float = 0.0,
-    obs_count: int = 0
+    obs_count: int = 0,
+    repeat_ratio: float = 0.0,
+    src_port: Optional[int] = None
 ) -> Tuple[int, float, Optional[str]]:
     """
-    Safety guard to prevent ordinary multicast, discovery, or standard QUIC (UDP:443) traffic
-    from being classified as confirmed Command and Control (C2) without supporting external evidence.
+    Evidence-based safety guard to prevent misclassification of ordinary benign traffic
+    (multicast/discovery, uncorroborated QUIC, and short transient web transactions)
+    as Botnet Command and Control (C2).
 
-    Returns:
-        (sanitized_c2_prediction, sanitized_c2_score, safety_note)
+    Does NOT suppress all TCP/443 traffic:
+    Only suppresses short transactions with minimal packets/bytes when longitudinal
+    beaconing regularity (obs_count >= 5, iat_regularity >= 0.75) and dedicated channel
+    concentration (repeat_ratio >= 0.70) are absent. Real malware beaconing over 443
+    or transmitting substantial payload is preserved.
     """
+    # 1. Ordinary multicast or local discovery
     is_disc, reason = evaluate_multicast_discovery_safety(src_ip, dst_ip, dst_port, protocol)
-
     if is_disc:
         if c2_prediction == 1 or c2_score >= 0.50:
             logger.info(
@@ -144,12 +153,14 @@ def prevent_c2_multicast_misclassification(
                 f"Ordinary discovery/multicast traffic suppressed from C2 classification: {reason}"
             )
 
-    # Standard QUIC (UDP:443) egress without proven high timing regularity
-    if is_quic_traffic(dst_port, protocol) and (obs_count < 3 or iat_regularity < 0.5):
+    proto_upper = (protocol or "").upper()
+
+    # 2. Standard QUIC (UDP:443) egress without longitudinal timing regularity
+    if is_quic_traffic(dst_port, protocol, src_port=src_port) and (obs_count < 3 or iat_regularity < 0.5):
         if c2_prediction == 1 or c2_score >= 0.50:
             logger.info(
                 f"[SAFETY GUARD] Suppressed false C2 alert on standard QUIC web traffic: "
-                f"{src_ip} -> {dst_ip}:{dst_port} (obs={obs_count}, regularity={iat_regularity:.2f}). Original score: {c2_score:.4f}"
+                f"{src_ip}:{src_port} -> {dst_ip}:{dst_port} (obs={obs_count}, regularity={iat_regularity:.2f}). Original score: {c2_score:.4f}"
             )
             return (
                 0,
@@ -157,4 +168,61 @@ def prevent_c2_multicast_misclassification(
                 "Standard QUIC (UDP:443) egress suppressed from C2 classification due to lack of behavioral beaconing regularity."
             )
 
+    # 3. Short TCP web transaction (e.g., HTTP/HTTPS handshakes/keep-alives/checks, CDN requests)
+    # Checks either endpoint on standard web ports (80, 443, 8080, 8443)
+    # Narrow evidence-based criteria:
+    # - Port is standard web service (80, 443, 8080, 8443) on either dst_port or src_port
+    # - Volumetrics indicate transient non-exfiltration exchange (total_packets <= 15 and total_bytes <= 15000)
+    # - Causal history lacks persistent beaconing (obs_count < 5 or iat_regularity < 0.75)
+    # - Target diversity lacks dedicated channel concentration (repeat_ratio < 0.70)
+    is_web_port = (dst_port in (80, 443, 8080, 8443)) or (src_port is not None and src_port in (80, 443, 8080, 8443))
+    if proto_upper == "TCP" and is_web_port:
+        is_short_transaction = (total_packets <= 15 and total_bytes <= 15000)
+        lacks_sustained_beaconing = (obs_count < 5 or iat_regularity < 0.75)
+        lacks_dedicated_channel = (repeat_ratio < 0.70)
+
+        if is_short_transaction and lacks_sustained_beaconing and lacks_dedicated_channel:
+            if c2_prediction == 1 or c2_score >= 0.50:
+                logger.info(
+                    f"[SAFETY GUARD] Suppressed false C2 alert on short TCP web flow: "
+                    f"{src_ip}:{src_port} -> {dst_ip}:{dst_port} ({total_packets} pkts, {total_bytes} bytes, "
+                    f"obs={obs_count}, regularity={iat_regularity:.2f}, repeat={repeat_ratio:.2f}). Original score: {c2_score:.4f}"
+                )
+                return (
+                    0,
+                    min(0.25, c2_score * 0.15),
+                    "Short TCP web transaction suppressed from C2 classification: lacks longitudinal beaconing persistence and dedicated channel concentration."
+                )
+
     return c2_prediction, c2_score, None
+
+
+def prevent_c2_multicast_misclassification(
+    c2_prediction: int,
+    c2_score: float,
+    src_ip: str,
+    dst_ip: str,
+    dst_port: Optional[int],
+    protocol: str,
+    iat_regularity: float = 0.0,
+    obs_count: int = 0,
+    total_packets: int = 0,
+    total_bytes: int = 0,
+    repeat_ratio: float = 0.0,
+    src_port: Optional[int] = None
+) -> Tuple[int, float, Optional[str]]:
+    """Legacy alias calling evaluate_c2_safety_guard for backward compatibility."""
+    return evaluate_c2_safety_guard(
+        c2_prediction=c2_prediction,
+        c2_score=c2_score,
+        src_ip=src_ip,
+        dst_ip=dst_ip,
+        dst_port=dst_port,
+        protocol=protocol,
+        total_packets=total_packets,
+        total_bytes=total_bytes,
+        iat_regularity=iat_regularity,
+        obs_count=obs_count,
+        repeat_ratio=repeat_ratio,
+        src_port=src_port
+    )

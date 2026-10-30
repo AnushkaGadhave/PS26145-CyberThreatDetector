@@ -11,15 +11,15 @@ import type { ThreatAlert, NetworkFlow, DetectionModelInfo } from '../types/tele
 import type { DashboardOverviewResponse } from '../services/api';
 
 /**
- * Generates a filesystem-safe, timestamped filename matching the NETRA convention.
- * Example: NETRA_Threat_Report_2026-10-13_143000.csv
+ * Generates a filesystem-safe, timestamped filename matching the ThreatTrack convention.
+ * Example: ThreatTrack_Threat_Report_2026-10-13_143000.csv
  */
 export function generateReportFilename(prefix: string, extension: string = 'csv'): string {
   const now = new Date();
   const pad = (n: number) => n.toString().padStart(2, '0');
   const timestamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
   const ext = extension.startsWith('.') ? extension.slice(1) : extension;
-  return `NETRA_${prefix}_${timestamp}.${ext}`;
+  return `ThreatTrack_${prefix}_${timestamp}.${ext}`;
 }
 
 /**
@@ -104,8 +104,8 @@ export function generateComprehensiveReportCSV(params: {
 
   // Header Banner
   lines.push('# ==============================================================================');
-  lines.push('# NETRA CYBER THREAT MONITORING SYSTEM - COMPREHENSIVE SECURITY REPORT');
-  lines.push('# Problem Statement 26145: AI-Based Detection of Cyber Threats in Unidirectional IP Traffic');
+  lines.push('# THREATTRACK CYBER THREAT MONITORING SYSTEM - COMPREHENSIVE SECURITY REPORT');
+  lines.push('# ThreatTrack: AI-Powered Detection of Cyber Threats in Unidirectional IP Traffic');
   lines.push(`# Exported At: ${now.toUTCString()}`);
   lines.push('# System Ingress Policy: Passive Unidirectional RX Diode • Zero-Transmit Enforced');
   lines.push('# Classification: RESTRICTED // SOC OPERATIONAL TELEMETRY');

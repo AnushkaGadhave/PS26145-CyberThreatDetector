@@ -60,7 +60,7 @@ export const ModelsPage: React.FC<ModelsPageProps> = ({ models, liveStatuses = [
 
         <div className="flex items-center gap-2">
           <span className="text-xs font-mono px-3 py-1.5 rounded-full bg-[#10103D] border border-[#242452] text-[#A8F500]">
-            SIH Problem Statement 26145
+            AI-Powered Detection Engine
           </span>
         </div>
       </div>
@@ -288,7 +288,7 @@ export const ModelsPage: React.FC<ModelsPageProps> = ({ models, liveStatuses = [
             </div>
 
             <p className="text-xs font-sans text-[#A5A5BE] mb-4 leading-relaxed">
-              In accordance with SIH Problem Statement 26145 audit guidelines, model constraints are rigorously disclosed rather than concealed:
+              Model constraints, inference assumptions, and operational boundaries are documented below:
             </p>
 
             <div className="space-y-3 text-xs font-mono">

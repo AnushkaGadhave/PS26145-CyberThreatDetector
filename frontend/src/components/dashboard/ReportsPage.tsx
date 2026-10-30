@@ -136,8 +136,8 @@ export const ReportsPage: React.FC<ReportsPageProps> = ({
       if (reportType === 'comprehensive') {
         if (format === 'json') {
           content = JSON.stringify({
-            system: "NETRA Cyber Threat Monitoring System",
-            problem_statement: "SIH PS 26145: AI-Based Detection of Cyber Threats in Unidirectional IP Traffic",
+            system: "ThreatTrack Cyber Threat Monitoring System",
+            description: "AI-Powered Detection of Cyber Threats in Unidirectional IP Traffic",
             exported_at: new Date().toISOString(),
             telemetry_overview: overview,
             observed_threat_alerts: alerts,
@@ -152,7 +152,7 @@ export const ReportsPage: React.FC<ReportsPageProps> = ({
       } else if (reportType === 'alerts') {
         if (format === 'json') {
           content = JSON.stringify({
-            system: "NETRA Threat Alerts Log",
+            system: "ThreatTrack Threat Alerts Log",
             exported_at: new Date().toISOString(),
             total_alerts: alerts.length,
             alerts
@@ -167,7 +167,7 @@ export const ReportsPage: React.FC<ReportsPageProps> = ({
         const activeFlows = flows || [];
         if (format === 'json') {
           content = JSON.stringify({
-            system: "NETRA Network Flows Log",
+            system: "ThreatTrack Network Flows Log",
             exported_at: new Date().toISOString(),
             total_flows: activeFlows.length,
             flows: activeFlows
@@ -181,7 +181,7 @@ export const ReportsPage: React.FC<ReportsPageProps> = ({
       } else if (reportType === 'models') {
         if (format === 'json') {
           content = JSON.stringify({
-            system: "NETRA Model Evaluation Audit",
+            system: "ThreatTrack Model Evaluation Audit",
             exported_at: new Date().toISOString(),
             models
           }, null, 2);

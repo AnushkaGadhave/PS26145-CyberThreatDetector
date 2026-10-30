@@ -96,9 +96,11 @@ def export_report(
     severity: Optional[str] = Query(None, description="Optional filter by severity"),
     threat_class: Optional[str] = Query(None, description="Optional filter by threat class"),
     limit: int = Query(500, ge=1, le=2000, description="Maximum records to include"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
 ):
     try:
+        user_id_filter = None if getattr(current_user, "role", "") == "admin" else getattr(current_user, "user_id", None)
         now_utc = datetime.now(timezone.utc)
         timestamp_str = now_utc.strftime("%Y-%m-%d_%H%M%S")
 
@@ -109,7 +111,7 @@ def export_report(
             "flows": "Flows_Report",
             "models": "Model_Audit"
         }
-        filename = f"NETRA_{prefix_map[report_type]}_{timestamp_str}.{format}"
+        filename = f"ThreatTrack_{prefix_map[report_type]}_{timestamp_str}.{format}"
 
         # ----------------------------------------------------------------------
         # 1. ALERTS EXPORT
@@ -120,12 +122,13 @@ def export_report(
                 limit=limit,
                 offset=0,
                 severity=severity,
-                threat_class=threat_class
+                threat_class=threat_class,
+                user_id=user_id_filter
             )
 
             if format == "json":
                 data = {
-                    "system": "NETRA Cyber Threat Detection System",
+                    "system": "ThreatTrack Cyber Threat Detection System",
                     "exported_at": now_utc.isoformat(),
                     "total_records": len(alerts),
                     "alerts": [a.to_dict() for a in alerts]
@@ -159,11 +162,11 @@ def export_report(
         # 2. FLOWS EXPORT
         # ----------------------------------------------------------------------
         elif report_type == "flows":
-            flows, _ = FlowRepository.get_flows(db=db, limit=limit, offset=0)
+            flows, _ = FlowRepository.get_flows(db=db, limit=limit, offset=0, user_id=user_id_filter)
 
             if format == "json":
                 data = {
-                    "system": "NETRA Cyber Threat Detection System",
+                    "system": "ThreatTrack Cyber Threat Detection System",
                     "exported_at": now_utc.isoformat(),
                     "total_records": len(flows),
                     "flows": [f.to_dict() for f in flows]
@@ -198,7 +201,7 @@ def export_report(
 
             if format == "json":
                 data = {
-                    "system": "NETRA Cyber Threat Detection System",
+                    "system": "ThreatTrack Cyber Threat Detection System",
                     "exported_at": now_utc.isoformat(),
                     "models": BENCHMARK_MODELS,
                     "live_compatibility_statuses": {k: {"status": v.status, "reason": v.reason} for k, v in live_statuses.items()}
@@ -228,12 +231,12 @@ def export_report(
         # 4. COMPREHENSIVE SECURITY REPORT (DEFAULT)
         # ----------------------------------------------------------------------
         else:
-            overview = DashboardRepository.get_overview(db=db)
-            alerts, _ = AlertRepository.get_alerts(db=db, limit=limit, offset=0)
+            overview = DashboardRepository.get_overview(db=db, user_id=user_id_filter)
+            alerts, _ = AlertRepository.get_alerts(db=db, limit=limit, offset=0, user_id=user_id_filter)
 
             if format == "json":
                 data = {
-                    "system": "NETRA - Unidirectional Cyber Threat Monitoring System",
+                    "system": "ThreatTrack - Unidirectional Cyber Threat Monitoring System",
                     "problem_statement": "SIH PS 26145: AI-Based Detection of Cyber Threats in Unidirectional IP Traffic",
                     "exported_at": now_utc.isoformat(),
                     "telemetry_overview": overview,
@@ -252,7 +255,7 @@ def export_report(
                 writer = csv.writer(output)
 
                 # Banner
-                writer.writerow(["# NETRA CYBER THREAT MONITORING SYSTEM - COMPREHENSIVE SECURITY REPORT"])
+                writer.writerow(["# THREATTRACK CYBER THREAT MONITORING SYSTEM - COMPREHENSIVE SECURITY REPORT"])
                 writer.writerow(["# Problem Statement: SIH PS 26145 - AI-Based Detection of Cyber Threats in Unidirectional IP Traffic"])
                 writer.writerow([f"# Exported At (UTC): {now_utc.isoformat()}"])
                 writer.writerow(["# Ingress Policy: Passive Unidirectional RX Diode • Zero-Transmit Enforced"])

@@ -49,10 +49,10 @@ export const FinalCTA: React.FC<FinalCTAProps> = ({ onNavigate }) => {
           </a>
         </div>
 
-        {/* Official SIH Tagline */}
+        {/* Technical Footer Note */}
         <div className="mt-14 pt-8 border-t border-[#242452]/60 flex items-center gap-2 text-xs font-mono text-[#A5A5BE]/70">
           <Shield className="w-3.5 h-3.5 text-[#A8F500]" />
-          <span>Smart India Hackathon • Problem Statement 26145 • Read-Only Unidirectional Telemetry</span>
+          <span>ThreatTrack • Passive Read-Only Network Threat Monitoring</span>
         </div>
       </div>
     </section>

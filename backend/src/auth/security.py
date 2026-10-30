@@ -28,10 +28,13 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480"
 
 # Cookie settings
 SESSION_COOKIE_NAME = "netra_session"
-# In development on http://127.0.0.1 or http://localhost, Secure must be False so browsers store the cookie over HTTP.
-# In production with TLS/HTTPS, set SESSION_COOKIE_SECURE=true.
-SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "false").lower() in ("true", "1", "yes")
-SESSION_COOKIE_SAMESITE = os.getenv("SESSION_COOKIE_SAMESITE", "lax").lower()
+# In local development over HTTP, Secure must be False.
+# On Render / production TLS, defaults to Secure=True and SameSite=None for cross-domain Vercel frontend compatibility.
+is_production = os.getenv("RENDER", "").lower() in ("true", "1", "yes") or os.getenv("ENVIRONMENT", "").lower() == "production"
+default_cookie_secure = "true" if is_production else "false"
+default_cookie_samesite = "none" if is_production else "lax"
+SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", default_cookie_secure).lower() in ("true", "1", "yes")
+SESSION_COOKIE_SAMESITE = os.getenv("SESSION_COOKIE_SAMESITE", default_cookie_samesite).lower()
 
 # Rate limiting / brute-force lockout thresholds
 MAX_FAILED_LOGIN_ATTEMPTS = int(os.getenv("MAX_FAILED_LOGIN_ATTEMPTS", "5"))
@@ -89,23 +92,17 @@ def dummy_verify_password() -> None:
 
 def validate_password_strength(password: str) -> Tuple[bool, Optional[str]]:
     """
-    Validates that a password satisfies defense-grade SOC security policies:
-    - At least 10 characters in length
-    - At least one uppercase letter (A-Z)
-    - At least one lowercase letter (a-z)
+    Validates password strength policies:
+    - At least 8 characters in length
+    - At least one letter (a-z or A-Z)
     - At least one numerical digit (0-9)
-    - At least one special symbol (!@#$%^&*...)
     """
-    if len(password) < 10:
-        return False, "Password must be at least 10 characters long."
-    if not re.search(r"[A-Z]", password):
-        return False, "Password must contain at least one uppercase letter (A-Z)."
-    if not re.search(r"[a-z]", password):
-        return False, "Password must contain at least one lowercase letter (a-z)."
+    if len(password) < 8:
+        return False, "Password must be at least 8 characters long."
+    if not re.search(r"[A-Za-z]", password):
+        return False, "Password must contain at least one letter."
     if not re.search(r"[0-9]", password):
         return False, "Password must contain at least one digit (0-9)."
-    if not re.search(r'[!@#$%^&*(),.?":{}|<>_\-+=\[\]\\;`~]', password):
-        return False, "Password must contain at least one special character (!@#$%^&*...)."
     return True, None
 
 

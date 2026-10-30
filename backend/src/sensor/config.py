@@ -50,6 +50,13 @@ class SensorConfig:
     sensor_id: str = field(default_factory=get_default_sensor_id)
     sensor_version: str = "1.0.0-win"
 
+    # Remote Ingestion & Cloud Transmission
+    enable_remote_transmission: bool = False
+    remote_backend_url: str = "http://127.0.0.1:8000"
+    sensor_api_key: Optional[str] = None
+    transmission_batch_size: int = 25
+    transmission_interval: float = 2.0
+
     def to_dict(self) -> Dict[str, Any]:
         """Return dictionary representation of sensor configuration."""
         return {
@@ -67,5 +74,9 @@ class SensorConfig:
             "enable_feature_validation": self.enable_feature_validation,
             "enable_detection": self.enable_detection,
             "traffic_context": self.traffic_context,
-            "suppression_window_seconds": self.suppression_window_seconds
+            "suppression_window_seconds": self.suppression_window_seconds,
+            "enable_remote_transmission": self.enable_remote_transmission,
+            "remote_backend_url": self.remote_backend_url,
+            "transmission_batch_size": self.transmission_batch_size,
+            "transmission_interval": self.transmission_interval
         }

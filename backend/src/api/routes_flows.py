@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from src.database.database import get_db
+from src.database.models import UserModel
 from src.database.schemas import FlowResponse, FlowListResponse
 from src.database.repository import FlowRepository
 from src.auth.dependencies import get_current_user
@@ -35,9 +36,11 @@ def get_flows(
     src_ip: Optional[str] = Query(None, description="Filter by source IP address"),
     dst_ip: Optional[str] = Query(None, description="Filter by destination IP address"),
     traffic_context: Optional[str] = Query(None, description="Filter by traffic context (e.g. UNLABELED_LIVE, LAB_ATTACK)"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
     try:
+        user_id_filter = None if current_user.role == "admin" else current_user.user_id
         flows, total = FlowRepository.get_flows(
             db=db,
             limit=limit,
@@ -45,7 +48,8 @@ def get_flows(
             protocol=protocol,
             src_ip=src_ip,
             dst_ip=dst_ip,
-            traffic_context=traffic_context
+            traffic_context=traffic_context,
+            user_id=user_id_filter
         )
         return FlowListResponse(
             total=total,
@@ -68,11 +72,12 @@ def get_flows(
 )
 def get_flow_by_id(
     flow_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
     try:
         flow = FlowRepository.get_by_flow_id(db=db, flow_id=flow_id)
-        if not flow:
+        if not flow or (current_user.role != "admin" and flow.user_id != current_user.user_id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Flow '{flow_id}' not found."

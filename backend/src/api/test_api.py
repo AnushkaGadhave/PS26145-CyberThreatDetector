@@ -308,6 +308,12 @@ class TestFastAPIBackend(unittest.TestCase):
         ifaces = iface_res.json()
         self.assertIsInstance(ifaces, list)
         self.assertGreater(len(ifaces), 0)
+        for iface in ifaces:
+            self.assertIn("name", iface)
+            self.assertIn("ip", iface)
+            self.assertIn("ips", iface)
+            self.assertIsInstance(iface["ips"], list)
+            self.assertIsInstance(iface["ip"], str)
 
         events_res = self.client.get("/api/capture/events")
         self.assertEqual(events_res.status_code, 200)
@@ -320,9 +326,9 @@ class TestFastAPIBackend(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertIn("Content-Disposition", res.headers)
         disp = res.headers["Content-Disposition"]
-        self.assertTrue("attachment;" in disp and "NETRA_Security_Report_" in disp and ".csv" in disp)
+        self.assertTrue("attachment;" in disp and "ThreatTrack_Security_Report_" in disp and ".csv" in disp)
         text = res.text
-        self.assertIn("# NETRA CYBER THREAT MONITORING SYSTEM - COMPREHENSIVE SECURITY REPORT", text)
+        self.assertIn("# THREATTRACK CYBER THREAT MONITORING SYSTEM - COMPREHENSIVE SECURITY REPORT", text)
         self.assertIn("Total Network Flows Monitored", text)
         self.assertIn("flow_test_api_01", text)
         self.assertIn("alert_test_api_01", text)
@@ -332,7 +338,7 @@ class TestFastAPIBackend(unittest.TestCase):
         """13. Test GET /api/reports/export?report_type=alerts with filtering."""
         res_all = self.client.get("/api/reports/export?report_type=alerts&format=csv")
         self.assertEqual(res_all.status_code, 200)
-        self.assertIn("NETRA_Threat_Report_", res_all.headers["Content-Disposition"])
+        self.assertIn("ThreatTrack_Threat_Report_", res_all.headers["Content-Disposition"])
         self.assertIn("alert_test_api_01", res_all.text)
         self.assertIn("alert_test_api_02", res_all.text)
 
@@ -346,7 +352,7 @@ class TestFastAPIBackend(unittest.TestCase):
         """14. Test GET /api/reports/export?report_type=flows&format=csv."""
         res = self.client.get("/api/reports/export?report_type=flows&format=csv")
         self.assertEqual(res.status_code, 200)
-        self.assertIn("NETRA_Flows_Report_", res.headers["Content-Disposition"])
+        self.assertIn("ThreatTrack_Flows_Report_", res.headers["Content-Disposition"])
         self.assertIn("flow_test_api_01", res.text)
         self.assertIn("192.168.0.104", res.text)
 
@@ -354,7 +360,7 @@ class TestFastAPIBackend(unittest.TestCase):
         """15. Test GET /api/reports/export?report_type=models&format=csv."""
         res = self.client.get("/api/reports/export?report_type=models&format=csv")
         self.assertEqual(res.status_code, 200)
-        self.assertIn("NETRA_Model_Audit_", res.headers["Content-Disposition"])
+        self.assertIn("ThreatTrack_Model_Audit_", res.headers["Content-Disposition"])
         self.assertIn("DDoS Volumetric Detection Engine", res.text)
         self.assertIn("PARTIALLY_COMPATIBLE", res.text)
 

@@ -145,19 +145,51 @@ class AlertPipeline:
                 ))
             else:
                 c2_pred = 1 if c2_score >= 0.50 else 0
+
+                # Apply evidence-based safety guard (multicast, uncorroborated QUIC, and short TCP web transactions)
+                from src.sensor.safety import evaluate_c2_safety_guard
+                c2_pred, c2_score, safety_note = evaluate_c2_safety_guard(
+                    c2_prediction=c2_pred,
+                    c2_score=c2_score,
+                    src_ip=flow.src_ip,
+                    dst_ip=flow.dst_ip,
+                    dst_port=flow.dst_port,
+                    protocol=flow.protocol,
+                    total_packets=flow.total_packets,
+                    total_bytes=flow.total_bytes,
+                    iat_regularity=c2_feat_dict.get('IAT_Regularity_Causal', 0.0),
+                    obs_count=tot_src_dst_flows,
+                    repeat_ratio=c2_feat_dict.get('RepeatRatio_SrcDst_Causal', 0.0),
+                    src_port=flow.src_port
+                )
+
                 c2_ev, c2_sum = EvidenceBuilder.build_c2_evidence(
                     flow=flow,
                     c2_features_dict=c2_feat_dict,
                     score=c2_score,
                     model_status="FULLY_COMPATIBLE"
                 )
-                conf_band = "HIGH_CONFIDENCE" if c2_score >= 0.85 else ("MEDIUM_CONFIDENCE" if c2_score >= 0.50 else "LOW_CONFIDENCE")
+                if safety_note:
+                    c2_sum = f"{c2_sum} Safety policy note: {safety_note}"
+
+                # PCA reconstruction error is a continuous anomaly metric, not a calibrated probability.
+                # High/Medium confidence strictly requires corroborated sustained beaconing evidence.
+                has_sustained_beaconing = tot_src_dst_flows >= 5 and c2_feat_dict.get('IAT_Regularity_Causal', 0.0) >= 0.75
+                if has_sustained_beaconing and c2_score >= 0.85 and c2_pred == 1:
+                    conf_band = "HIGH_CONFIDENCE"
+                elif has_sustained_beaconing and c2_score >= 0.50 and c2_pred == 1:
+                    conf_band = "MEDIUM_CONFIDENCE"
+                elif c2_pred == 1:
+                    conf_band = "LOW_CONFIDENCE"
+                else:
+                    conf_band = "NOT_APPLICABLE"
+
                 detector_results.append(DetectorResult(
                     detector="HybridPCA_Botnet_C2",
                     threat_class="BOTNET_C2",
                     prediction=c2_pred,
                     score=c2_score,
-                    confidence=c2_score,
+                    confidence=None,  # Continuous anomaly score, not a calibrated probability
                     confidence_band=conf_band,
                     compatible="FULLY_COMPATIBLE",
                     status="READY",

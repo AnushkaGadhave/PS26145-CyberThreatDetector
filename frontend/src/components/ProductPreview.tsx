@@ -63,9 +63,6 @@ export const ProductPreview: React.FC<ProductPreviewProps> = ({ onNavigate }) =>
             THE REAL-TIME<br />
             <span className="text-[#39D7FF]">MONITORING INTERFACE</span>
           </h2>
-          <p className="mt-4 text-base sm:text-lg text-[#A5A5BE] font-sans">
-            A high-density operational cockpit built for security analysts to observe temporal flow rates, triage incoming alerts, and verify explainable model evidence.
-          </p>
         </div>
 
         {/* Big Dashboard Showcase Panel */}
@@ -77,7 +74,7 @@ export const ProductPreview: React.FC<ProductPreviewProps> = ({ onNavigate }) =>
               <div>
                 <div className="flex items-center gap-2">
                   <span className="font-heading font-bold text-lg text-[#F5F5F7]">
-                    NETRA Security Operations Center
+                    ThreatTrack Security Operations Center
                   </span>
                   <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-[#A8F500]/15 text-[#A8F500] border border-[#A8F500]/30">
                     CONSOLE PREVIEW

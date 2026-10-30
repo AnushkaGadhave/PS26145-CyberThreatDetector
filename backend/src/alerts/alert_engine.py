@@ -229,12 +229,10 @@ class AlertEngine:
 
             elif threat_class == "BOTNET_C2":
                 c2_score = highest_confidence or max_anomaly_score
-                if c2_score >= 0.85:
+                if confidence_band == "HIGH_CONFIDENCE":
                     severity = "HIGH" if t_ctx == "UNLABELED_LIVE" else "CRITICAL"
-                    confidence_band = "HIGH_CONFIDENCE"
-                elif c2_score >= 0.50:
+                elif c2_score >= 0.50 and confidence_band == "MEDIUM_CONFIDENCE":
                     severity = "MEDIUM" if t_ctx == "UNLABELED_LIVE" else "HIGH"
-                    confidence_band = "MEDIUM_CONFIDENCE"
                 else:
                     severity = "LOW"
                     confidence_band = "LOW_CONFIDENCE"

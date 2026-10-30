@@ -18,7 +18,7 @@ interface TopBarProps {
   onRefresh?: () => void;
   onExitToLanding: () => void;
   onLogout?: () => void;
-  captureState?: 'ACTIVE' | 'STOPPED' | 'ERROR';
+  captureState?: 'ACTIVE' | 'STOPPED' | 'ERROR' | 'STANDBY';
   backendAvailable?: boolean;
   isRefreshing?: boolean;
 }

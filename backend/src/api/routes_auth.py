@@ -20,13 +20,17 @@ from src.database.repository import UserRepository, UserSessionRepository
 from src.database.schemas import (
     LoginRequest,
     LoginResponse,
+    RegisterRequest,
+    RegisterResponse,
     UserResponse,
     CurrentUserResponse,
     LogoutResponse,
 )
 from src.auth.security import (
+    hash_password,
     verify_password,
     dummy_verify_password,
+    validate_password_strength,
     create_access_token,
     decode_access_token,
     SESSION_COOKIE_NAME,
@@ -41,6 +45,99 @@ from src.auth.dependencies import get_current_user, extract_token_from_request
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication & Access Control"])
+
+
+@router.post(
+    "/register",
+    response_model=RegisterResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="User Account Registration",
+    description="Registers a new individual user account and establishes an authenticated session."
+)
+def register(
+    payload: RegisterRequest,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db)
+):
+    """
+    Register a new user account with secure Argon2id password hashing.
+    Enforces password strength policies and prevents duplicate email registration.
+    """
+    normalized_email = payload.email.strip().lower()
+
+    # 1. Check for duplicate registration
+    existing_user = UserRepository.get_by_email(db, normalized_email)
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An account with this email address already exists. Please sign in."
+        )
+
+    # 2. Validate password policy
+    is_valid_pwd, pwd_error = validate_password_strength(payload.password)
+    if not is_valid_pwd:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=pwd_error or "Password does not meet defense-grade security requirements."
+        )
+
+    # 3. Hash password and persist user
+    try:
+        hashed = hash_password(payload.password)
+        new_user = UserRepository.create_user(
+            db=db,
+            email=normalized_email,
+            hashed_password=hashed,
+            full_name=payload.full_name.strip(),
+            role="user",
+            is_active=True
+        )
+    except Exception as e:
+        logger.error(f"Failed to create user account: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while creating your account. Please try again."
+        )
+
+    # 4. Mint authenticated session
+    token, jti, expires_at = create_access_token(
+        user_id=new_user.user_id,
+        email=new_user.email,
+        role=new_user.role
+    )
+
+    client_ip = request.client.host if request.client else None
+    user_agent = request.headers.get("User-Agent")
+
+    UserSessionRepository.create_session(
+        db=db,
+        user_id=new_user.user_id,
+        token_jti=jti,
+        expires_at=expires_at,
+        ip_address=client_ip,
+        user_agent=user_agent
+    )
+
+    # 5. Set session cookie
+    max_age_seconds = ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=token,
+        httponly=True,
+        samesite=SESSION_COOKIE_SAMESITE,
+        secure=SESSION_COOKIE_SECURE,
+        max_age=max_age_seconds,
+        path="/",
+    )
+
+    logger.info(f"New user registered successfully: {new_user.email} (ID: {new_user.user_id})")
+    return RegisterResponse(
+        success=True,
+        message="Account created successfully.",
+        user=UserResponse.model_validate(new_user),
+        token=token
+    )
 
 
 @router.post(
@@ -160,7 +257,8 @@ def login(
     return LoginResponse(
         success=True,
         message="Authentication successful.",
-        user=UserResponse.model_validate(user)
+        user=UserResponse.model_validate(user),
+        token=token
     )
 
 

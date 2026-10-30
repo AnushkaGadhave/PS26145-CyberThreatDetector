@@ -124,7 +124,7 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({
       <div className="rounded-xl bg-[#10103D]/60 border border-[#242452] p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs font-mono">
         <div className="flex items-center gap-2.5 text-[#39D7FF]">
           <span className="w-2 h-2 rounded-full bg-[#39D7FF] animate-ping" />
-          <span>SIH PS 26145 • Operational Telemetry Console Active</span>
+          <span>Operational Telemetry Console Active</span>
           <span className="text-[#A5A5BE] hidden md:inline">|</span>
           <span className="text-[#A5A5BE] hidden md:inline">Passive Ingress Diode (Zero-Transmit Mode)</span>
         </div>

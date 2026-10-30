@@ -1,5 +1,5 @@
 """
-Convenience entry script to launch NETRA Local Windows Sensor.
+Convenience entry script to launch ThreatTrack Local Windows Sensor.
 Example usage:
   python scripts/run_sensor.py --list-interfaces
   python scripts/run_sensor.py --interface "Wi-Fi 2" --duration 10

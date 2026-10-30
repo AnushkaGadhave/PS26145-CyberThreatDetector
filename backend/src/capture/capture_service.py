@@ -54,6 +54,7 @@ class LiveCaptureManager:
         self.start_time: Optional[float] = None
         self.last_packet_time: Optional[float] = None
         self.error_message: Optional[str] = None
+        self.current_user_id: Optional[str] = None
 
         # Live counters
         self.total_packets: int = 0
@@ -86,9 +87,12 @@ class LiveCaptureManager:
                 desc = iface.get("description", "")
                 ips = iface.get("ips", [])
                 is_active = any("192.168" in ip or "10." in ip or "172." in ip for ip in ips)
+                # Primary routable IPv4 address or first assigned IP
+                primary_ip = next((ip for ip in ips if not ip.startswith("127.") and ":" not in ip), ips[0] if ips else "")
                 interfaces.append({
                     "name": name,
                     "description": desc,
+                    "ip": primary_ip,
                     "ips": ips,
                     "is_active": is_active,
                     "is_wireless": "Wi-Fi" in name or "Wireless" in desc,
@@ -101,6 +105,7 @@ class LiveCaptureManager:
                 interfaces.append({
                     "name": str(iface_name),
                     "description": str(iface_name),
+                    "ip": "",
                     "ips": [],
                     "is_active": False,
                     "is_wireless": "Wi-Fi" in str(iface_name),
@@ -109,25 +114,38 @@ class LiveCaptureManager:
 
         return interfaces
 
-    def start(self, requested_interface: Optional[str] = None) -> Dict[str, Any]:
+    def start(self, requested_interface: Optional[str] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
         """Start passive network monitoring on the chosen or default interface."""
         with self._state_lock:
             if self.status in ("RUNNING", "STARTING"):
+                if user_id and self.current_user_id and self.current_user_id != user_id:
+                    return {
+                        "success": False,
+                        "code": "OCCUPIED_BY_ANOTHER_USER",
+                        "message": "Local packet capture is currently active under another user account. Sessions remain isolated.",
+                        "status": "OCCUPIED"
+                    }
                 return {
                     "success": False,
+                    "code": "ALREADY_RUNNING",
                     "message": f"Capture is already {self.status} on interface '{self.actual_interface}'.",
                     "status": self.status
                 }
 
             self.status = "STARTING"
             self.error_message = None
+            self.current_user_id = user_id
 
             try:
                 # Resolve target interface
                 if requested_interface:
                     target_iface = requested_interface
                 else:
-                    target_iface = "Wi-Fi 3"  # Default active on host
+                    available = self.get_available_interfaces()
+                    target_iface = next(
+                        (i["name"] for i in available if i.get("is_active") and i.get("is_wireless")),
+                        next((i["name"] for i in available if i.get("is_active") and "virtualbox" not in i.get("description", "").lower() and "virtualbox" not in i.get("name", "").lower()), "Wi-Fi 3")
+                    )
 
                 self.actual_interface = resolve_interface_name(target_iface)
                 self.interface = target_iface
@@ -144,10 +162,13 @@ class LiveCaptureManager:
                 self.alerts_generated = 0
                 self.recent_events.clear()
 
-                # Initialize FlowBuilder
+                # Initialize FlowBuilder with responsive active and protocol-specific timeouts
                 self._builder = FlowBuilder(
                     timeout_seconds=30.0,
-                    flush_interval_seconds=3.0,
+                    flush_interval_seconds=1.0,
+                    active_timeout_seconds=15.0,
+                    udp_timeout_seconds=3.0,
+                    tcp_idle_timeout_seconds=10.0,
                     consumer_callback=self._on_flow_built,
                     jsonl_path=None,
                     csv_path=None
@@ -172,7 +193,7 @@ class LiveCaptureManager:
                 self._thread.start()
 
                 self.status = "RUNNING"
-                logger.info(f"Passive live capture worker started on interface '{self.actual_interface}'.")
+                logger.info(f"Passive live capture worker started on interface '{self.actual_interface}' for user '{user_id}'.")
 
                 return {
                     "success": True,
@@ -180,24 +201,61 @@ class LiveCaptureManager:
                     "interface": self.actual_interface,
                     "status": self.status
                 }
+            except PermissionError as p_err:
+                self.status = "ERROR"
+                self.error_message = (
+                    f"Permission denied starting capture on '{requested_interface or target_iface}': {p_err}. "
+                    "Packet capture on Windows requires Administrator privileges or Npcap driver access."
+                )
+                logger.error(self.error_message)
+                return {
+                    "success": False,
+                    "code": "PERMISSION_REQUIRED",
+                    "message": self.error_message,
+                    "error": str(p_err),
+                    "status": self.status
+                }
             except Exception as e:
                 self.status = "ERROR"
-                self.error_message = str(e)
+                err_str = str(e)
+                if "access is denied" in err_str.lower() or "winerror 5" in err_str.lower() or "permission" in err_str.lower():
+                    self.error_message = (
+                        f"Packet capture driver error: {err_str}. "
+                        "Verify Npcap installation and Administrator rights."
+                    )
+                    code = "PERMISSION_REQUIRED"
+                elif "interface" in err_str.lower() or "not found" in err_str.lower():
+                    self.error_message = f"Interface unavailable: {err_str}"
+                    code = "INTERFACE_UNAVAILABLE"
+                else:
+                    self.error_message = err_str
+                    code = "ERROR"
+
                 logger.error(f"Failed to start live capture: {e}", exc_info=True)
                 return {
                     "success": False,
-                    "message": f"Failed to start packet capture: {e}",
+                    "code": code,
+                    "message": self.error_message,
                     "error": str(e),
                     "status": self.status
                 }
 
-    def stop(self) -> Dict[str, Any]:
+    def stop(self, user_id: Optional[str] = None, is_admin: bool = False) -> Dict[str, Any]:
         """Stop passive network monitoring gracefully and flush all flows."""
         with self._state_lock:
             if self.status not in ("RUNNING", "STARTING"):
                 return {
                     "success": True,
                     "message": f"Capture is already {self.status}.",
+                    "status": self.status
+                }
+
+            # Enforce ownership: normal users can only stop their own active capture
+            if not is_admin and self.current_user_id and user_id and self.current_user_id != user_id:
+                return {
+                    "success": False,
+                    "code": "FORBIDDEN",
+                    "message": "Permission denied: You cannot stop a packet capture session owned by another user.",
                     "status": self.status
                 }
 
@@ -220,6 +278,7 @@ class LiveCaptureManager:
 
         with self._state_lock:
             self.status = "STOPPED"
+            self.current_user_id = None
             logger.info(
                 f"Capture stopped. Summary: {self.total_packets} packets, "
                 f"{self.flows_completed} flows, {self.alerts_generated} alerts."
@@ -281,10 +340,31 @@ class LiveCaptureManager:
                         timeout=1.0,
                         store=0
                     )
+                    # Periodically flush expired or closing flows even during low-traffic periods
+                    if self._builder and not self._stop_event.is_set():
+                        self._builder.flush_expired(time.time())
+                except PermissionError as perm_err:
+                    if not self._stop_event.is_set():
+                        logger.error(f"Permission denied on '{actual_iface}': {perm_err}")
+                        self.error_message = (
+                            f"Permission denied on interface '{actual_iface}'. "
+                            "Packet capture requires elevated privileges or Npcap Administrator driver access."
+                        )
+                        self.status = "ERROR"
+                        break
                 except Exception as sniff_err:
                     if not self._stop_event.is_set():
-                        logger.error(f"Sniff error on '{actual_iface}': {sniff_err}")
-                        self.error_message = str(sniff_err)
+                        err_str = str(sniff_err)
+                        logger.error(f"Sniff error on '{actual_iface}': {err_str}")
+                        if "access is denied" in err_str.lower() or "winerror 5" in err_str.lower() or "permission" in err_str.lower():
+                            self.error_message = (
+                                f"Packet capture permission error: {err_str}. "
+                                "Requires Administrator privileges or Npcap driver access."
+                            )
+                        elif "no such device" in err_str.lower() or "device not found" in err_str.lower():
+                            self.error_message = f"Interface unavailable: {err_str}"
+                        else:
+                            self.error_message = str(sniff_err)
                         self.status = "ERROR"
                         break
         except Exception as e:
@@ -326,7 +406,8 @@ class LiveCaptureManager:
             "iat_std": flow.iat_std,
             "iat_min": flow.iat_min,
             "iat_max": flow.iat_max,
-            "traffic_context": "UNLABELED_LIVE"
+            "traffic_context": "UNLABELED_LIVE",
+            "user_id": getattr(self, "current_user_id", None)
         }
 
         try:
@@ -358,7 +439,8 @@ class LiveCaptureManager:
             "duration": round(flow.duration, 3),
             "threat_outcome": generated_alert.threat_class if generated_alert else "BENIGN",
             "severity": generated_alert.severity if generated_alert else "BENIGN",
-            "alert_id": generated_alert.alert_id if generated_alert else None
+            "alert_id": generated_alert.alert_id if generated_alert else None,
+            "user_id": getattr(self, "current_user_id", None)
         }
         self.recent_events.appendleft(event_dict)
 
@@ -366,6 +448,7 @@ class LiveCaptureManager:
         """Callback invoked when AlertPipeline produces a genuine threat alert."""
         self.alerts_generated += 1
         alert_dict = alert.to_dict()
+        alert_dict["user_id"] = getattr(self, "current_user_id", None)
 
         try:
             with SessionLocal() as db:
@@ -377,39 +460,100 @@ class LiveCaptureManager:
         except Exception as db_err:
             logger.error(f"Failed to persist alert {alert.alert_id} to database: {db_err}")
 
-    def get_status(self) -> Dict[str, Any]:
-        """Returns the real operational status and volumetric counters of the capture worker."""
-        uptime = round(time.time() - self.start_time, 1) if self.start_time and self.status == "RUNNING" else 0.0
-        pps = round(self.total_packets / uptime, 1) if uptime > 0 else 0.0
-        kbps = round((self.total_packets * 128) / (uptime * 1024), 1) if uptime > 0 else 0.0
-        normalized_state = "ACTIVE" if self.status == "RUNNING" else self.status
+    def get_status(self, user_id: Optional[str] = None, is_admin: bool = False) -> Dict[str, Any]:
+        """Returns the real operational status, diagnostics, and volumetric counters of the capture worker."""
+        with self._state_lock:
+            # Check pcap driver availability
+            sensor_installed = bool(getattr(scapy.conf, "use_pcap", False))
 
-        return {
-            "status": self.status,
-            "state": normalized_state,
-            "interface": self.actual_interface,
-            "configured_interface": self.interface,
-            "start_time": self.start_time,
-            "uptime_seconds": uptime,
-            "last_packet_time": self.last_packet_time,
-            "total_packets": self.total_packets,
-            "packets_captured": self.total_packets,
-            "packets_dropped": 0,
-            "ip_packets": self.ip_packets,
-            "tcp_packets": self.tcp_packets,
-            "udp_packets": self.udp_packets,
-            "icmp_packets": self.icmp_packets,
-            "flows_completed": self.flows_completed,
-            "flows_created": self.flows_completed,
-            "alerts_generated": self.alerts_generated,
-            "threats_detected": self.alerts_generated,
-            "current_pps": pps,
-            "current_kbps": kbps,
-            "error_message": self.error_message
-        }
+            is_owner = (self.current_user_id == user_id) if (user_id and self.current_user_id) else True
+            if is_admin:
+                is_owner = True
 
-    def get_recent_events(self, limit: int = 30) -> List[Dict[str, Any]]:
-        """Return the most recent live stream events from the ring buffer."""
+            # If capture is active under another user's session:
+            if self.status in ("RUNNING", "STARTING") and not is_owner:
+                return {
+                    "status": "STANDBY",
+                    "state": "STANDBY",
+                    "diagnostic_state": "OCCUPIED_BY_ANOTHER_USER",
+                    "sensor_installed": sensor_installed,
+                    "interface": None,
+                    "configured_interface": None,
+                    "is_owner": False,
+                    "busy_by_other_user": True,
+                    "message": "Local packet sniffer is currently in use by another local session. Each user's traffic is isolated.",
+                    "total_packets": 0,
+                    "packets_captured": 0,
+                    "packets_dropped": 0,
+                    "ip_packets": 0,
+                    "tcp_packets": 0,
+                    "udp_packets": 0,
+                    "icmp_packets": 0,
+                    "flows_completed": 0,
+                    "flows_created": 0,
+                    "alerts_generated": 0,
+                    "threats_detected": 0,
+                    "current_pps": 0.0,
+                    "current_kbps": 0.0,
+                    "error_message": None
+                }
+
+            uptime = round(time.time() - self.start_time, 1) if self.start_time and self.status == "RUNNING" else 0.0
+            pps = round(self.total_packets / uptime, 1) if uptime > 0 else 0.0
+            kbps = round((self.total_packets * 128) / (uptime * 1024), 1) if uptime > 0 else 0.0
+            normalized_state = "ACTIVE" if self.status == "RUNNING" else self.status
+
+            # Derive rich diagnostic state
+            if not sensor_installed:
+                diagnostic_state = "SENSOR_NOT_INSTALLED"
+            elif self.status == "ERROR":
+                err_low = (self.error_message or "").lower()
+                if "permission" in err_low or "access is denied" in err_low or "admin" in err_low or "elevation" in err_low:
+                    diagnostic_state = "PERMISSION_REQUIRED"
+                elif "interface" in err_low or "not found" in err_low or "unavailable" in err_low:
+                    diagnostic_state = "INTERFACE_UNAVAILABLE"
+                else:
+                    diagnostic_state = "ERROR"
+            elif self.status == "RUNNING":
+                if uptime >= 2.0 and self.total_packets == 0:
+                    diagnostic_state = "RUNNING_NO_PACKETS"
+                else:
+                    diagnostic_state = "ACTIVE"
+            else:
+                diagnostic_state = "STANDBY"
+
+            return {
+                "status": self.status,
+                "state": normalized_state,
+                "diagnostic_state": diagnostic_state,
+                "sensor_installed": sensor_installed,
+                "is_owner": is_owner,
+                "busy_by_other_user": False,
+                "interface": self.actual_interface,
+                "configured_interface": self.interface,
+                "start_time": self.start_time,
+                "uptime_seconds": uptime,
+                "last_packet_time": self.last_packet_time,
+                "total_packets": self.total_packets,
+                "packets_captured": self.total_packets,
+                "packets_dropped": 0,
+                "ip_packets": self.ip_packets,
+                "tcp_packets": self.tcp_packets,
+                "udp_packets": self.udp_packets,
+                "icmp_packets": self.icmp_packets,
+                "flows_completed": self.flows_completed,
+                "flows_created": self.flows_completed,
+                "alerts_generated": self.alerts_generated,
+                "threats_detected": self.alerts_generated,
+                "current_pps": pps,
+                "current_kbps": kbps,
+                "error_message": self.error_message
+            }
+
+    def get_recent_events(self, limit: int = 30, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Return the most recent live stream events from the ring buffer, optionally scoped to a user."""
+        if user_id:
+            return [e for e in self.recent_events if e.get("user_id") == user_id][:limit]
         return list(self.recent_events)[:limit]
 
 

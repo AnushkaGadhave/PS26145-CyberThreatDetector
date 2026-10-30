@@ -173,7 +173,7 @@ npm run build
 | Protocol | `http://` (`127.0.0.1` / `localhost`) | `https://` (TLS 1.3 enforced) |
 | `SESSION_COOKIE_SECURE` | `False` (allows cookie over HTTP) | `True` (browser rejects cookie over plaintext HTTP) |
 | `SESSION_COOKIE_SAMESITE` | `lax` | `lax` or `strict` |
-| `CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Fully qualified domain (e.g. `https://netra.soc.gov.in`) |
+| `CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Fully qualified domain (e.g. `https://threattrack.soc.gov.in`) |
 | `JWT_SECRET_KEY` | Development passphrase | High-entropy random 256-bit key stored in secret vault |
 
 ---
@@ -182,4 +182,4 @@ npm run build
 
 1. **TLS / HTTPS**: In production, the API and frontend must be served behind a reverse proxy (e.g., NGINX, Caddy, or Cloudflare) with valid TLS certificates, and `SESSION_COOKIE_SECURE=True` must be enabled.
 2. **Distributed Rate Limiting**: In multi-instance or high-throughput deployments, a distributed store such as Redis should be used for rate limiting and IP-based connection throttling.
-3. **Hardware-Enforced Diode**: NETRA is designed for passive unidirectional traffic monitoring. Physical transmit lines (TX pins) should remain disconnected on sensor hardware to guarantee zero reverse packet transmission.
+3. **Hardware-Enforced Diode**: ThreatTrack is designed for passive unidirectional traffic monitoring. Physical transmit lines (TX pins) should remain disconnected on sensor hardware to guarantee zero reverse packet transmission.

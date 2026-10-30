@@ -58,6 +58,8 @@ class FlowResponse(BaseModel):
     iat_max: float = 0.0
 
     traffic_context: str = "UNLABELED_LIVE"
+    sensor_id: Optional[str] = None
+    user_id: Optional[str] = None
     created_at: Optional[str] = None
 
 
@@ -99,6 +101,8 @@ class AlertResponse(BaseModel):
 
     recommended_action: str = ""
     traffic_context: str = "UNLABELED_LIVE"
+    sensor_id: Optional[str] = None
+    user_id: Optional[str] = None
     flow_duration: Optional[float] = None
     total_packets: Optional[int] = None
     total_bytes: Optional[int] = None
@@ -192,6 +196,7 @@ class LoginResponse(BaseModel):
     success: bool = True
     message: str = "Authentication successful."
     user: UserResponse
+    token: Optional[str] = None
 
 
 class CurrentUserResponse(BaseModel):
@@ -203,3 +208,18 @@ class LogoutResponse(BaseModel):
     """Session termination response."""
     success: bool = True
     message: str = "Session terminated successfully."
+
+
+class RegisterRequest(BaseModel):
+    """User account registration request payload."""
+    full_name: str = Field(..., min_length=2, max_length=100, description="User full name")
+    email: str = Field(..., min_length=3, max_length=255, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", description="Work or personal email address")
+    password: str = Field(..., min_length=8, max_length=128, description="Password (min 8 characters)")
+
+
+class RegisterResponse(BaseModel):
+    """Successful account registration response."""
+    success: bool = True
+    message: str = "Account created successfully."
+    user: UserResponse
+    token: Optional[str] = None

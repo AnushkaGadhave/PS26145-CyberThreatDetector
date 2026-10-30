@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from src.database.database import get_db
+from src.database.models import UserModel
 from src.database.schemas import AlertResponse, AlertListResponse, AlertSummaryResponse
 from src.database.repository import AlertRepository, DashboardRepository, FlowRepository
 from src.auth.dependencies import get_current_user
@@ -37,7 +38,8 @@ def get_alerts(
     traffic_context: Optional[str] = Query(None, description="Filter by traffic context (e.g. UNLABELED_LIVE, LAB_ATTACK)"),
     start_time: Optional[float] = Query(None, description="Filter alerts on or after this timestamp"),
     end_time: Optional[float] = Query(None, description="Filter alerts on or before this timestamp"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
     try:
         if start_time is not None and end_time is not None and start_time > end_time:
@@ -46,6 +48,7 @@ def get_alerts(
                 detail="start_time cannot be greater than end_time."
             )
 
+        user_id_filter = None if current_user.role == "admin" else current_user.user_id
         alerts, total = AlertRepository.get_alerts(
             db=db,
             limit=limit,
@@ -55,7 +58,8 @@ def get_alerts(
             detector=detector,
             traffic_context=traffic_context,
             start_time=start_time,
-            end_time=end_time
+            end_time=end_time,
+            user_id=user_id_filter
         )
         return AlertListResponse(
             total=total,
@@ -80,10 +84,12 @@ def get_alerts(
 )
 def get_recent_alerts(
     limit: int = Query(20, ge=1, le=100, description="Number of recent alerts to retrieve"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
     try:
-        alerts = AlertRepository.get_recent_alerts(db=db, limit=limit)
+        user_id_filter = None if current_user.role == "admin" else current_user.user_id
+        alerts = AlertRepository.get_recent_alerts(db=db, limit=limit, user_id=user_id_filter)
         return [a.to_dict() for a in alerts]
     except Exception as e:
         raise HTTPException(
@@ -99,10 +105,12 @@ def get_recent_alerts(
     description="Retrieve aggregated alert counts by severity, threat class, and unlabeled live status for dashboard telemetry."
 )
 def get_alert_summary(
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
     try:
-        summary_data = DashboardRepository.get_alert_summary(db=db)
+        user_id_filter = None if current_user.role == "admin" else current_user.user_id
+        summary_data = DashboardRepository.get_alert_summary(db=db, user_id=user_id_filter)
         return AlertSummaryResponse(**summary_data)
     except Exception as e:
         raise HTTPException(
@@ -119,11 +127,12 @@ def get_alert_summary(
 )
 def get_alert_by_id(
     alert_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
     try:
         alert = AlertRepository.get_by_alert_id(db=db, alert_id=alert_id)
-        if not alert:
+        if not alert or (current_user.role != "admin" and alert.user_id != current_user.user_id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Alert '{alert_id}' not found."

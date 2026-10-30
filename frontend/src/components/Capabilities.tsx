@@ -39,7 +39,7 @@ export const Capabilities: React.FC = () => {
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
         {/* Section Header */}
-        <div className="text-center max-w-3xl mx-auto mb-16 sm:mb-20">
+        <div className="text-center max-w-3xl mx-auto mb-14 sm:mb-18">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#10103D] border border-[#242452] text-xs font-mono text-[#A8F500] mb-4">
             <span className="w-1.5 h-1.5 rounded-full bg-[#A8F500]" />
             CORE CAPABILITIES
@@ -48,9 +48,6 @@ export const Capabilities: React.FC = () => {
             ONE MONITORING LAYER.<br />
             <span className="text-[#A5A5BE]">MULTIPLE THREAT SIGNALS.</span>
           </h2>
-          <p className="mt-4 text-base sm:text-lg text-[#A5A5BE] font-sans">
-            Engineered from first principles for non-intrusive enterprise visibility across unidirectional taps and encrypted channels.
-          </p>
         </div>
 
         {/* 3 Premium Feature Blocks */}

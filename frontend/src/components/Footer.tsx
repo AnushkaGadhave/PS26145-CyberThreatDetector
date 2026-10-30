@@ -34,14 +34,14 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
                 <span className="w-2 h-2 rounded-full bg-[#A8F500]" />
               </div>
               <span className="font-heading font-extrabold text-xl text-[#F5F5F7] tracking-tight">
-                NETRA
+                ThreatTrack
               </span>
               <span className="text-xs font-mono px-2 py-0.5 rounded bg-[#10103D] border border-[#242452] text-[#A8F500]">
-                SIH PS 26145
+                AI-POWERED
               </span>
             </div>
             <p className="text-xs sm:text-sm text-[#A5A5BE] font-sans">
-              Passive Network Threat Monitoring • AI-Based Detection in Unidirectional IP Traffic
+              AI-Powered Network Threat Monitoring • Unidirectional IP Traffic Analysis
             </p>
           </div>
 
@@ -67,7 +67,7 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
               onClick={() => onNavigate('/dashboard')}
               className="text-[#A8F500] hover:text-[#B7FF19] font-semibold transition-colors flex items-center gap-1 cursor-pointer"
             >
-              <span>Explore Demo</span>
+              <span>Security Console</span>
               <ArrowUpRight className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -76,7 +76,7 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
         {/* Bottom Metadata & Legal */}
         <div className="pt-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs font-mono text-[#A5A5BE]/60">
           <div>
-            Smart India Hackathon • Problem Statement 26145 • Technical Prototype
+            ThreatTrack • AI-Powered Network Threat Monitoring System
           </div>
           <div className="flex items-center gap-4">
             <span>Read-Only Passive Telemetry</span>

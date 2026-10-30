@@ -10,6 +10,10 @@ pydantic>=2.6.0
 python-dotenv>=1.0.0
 httpx>=0.27.0
 
+# Authentication & Security
+PyJWT>=2.8.0
+argon2-cffi>=23.1.0
+
 # Network Packet Capture & Processing (Step 13-14)
 scapy>=2.5.0
 

@@ -74,6 +74,8 @@ class FlowModel(Base):
 
     # Operational Context
     traffic_context = Column(String(30), nullable=False, default="UNLABELED_LIVE", index=True)
+    sensor_id = Column(String(64), nullable=True, index=True)
+    user_id = Column(String(64), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     __table_args__ = (
@@ -114,6 +116,8 @@ class FlowModel(Base):
             "iat_min": self.iat_min,
             "iat_max": self.iat_max,
             "traffic_context": self.traffic_context,
+            "sensor_id": self.sensor_id,
+            "user_id": self.user_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -156,6 +160,8 @@ class AlertModel(Base):
 
     recommended_action = Column(Text, nullable=False, default="")
     traffic_context = Column(String(30), nullable=False, default="UNLABELED_LIVE", index=True)
+    sensor_id = Column(String(64), nullable=True, index=True)
+    user_id = Column(String(64), nullable=True, index=True)
 
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
@@ -188,6 +194,8 @@ class AlertModel(Base):
             "evidence_summary": self.evidence_summary,
             "recommended_action": self.recommended_action,
             "traffic_context": self.traffic_context,
+            "sensor_id": self.sensor_id,
+            "user_id": self.user_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -269,3 +277,90 @@ class UserSessionModel(Base):
     is_revoked = Column(Boolean, nullable=False, default=False, index=True)
     ip_address = Column(String(45), nullable=True)
     user_agent = Column(String(255), nullable=True)
+
+
+class SensorEnrollmentModel(Base):
+    """
+    Represents an authorized, enrolled local NETRA Windows Sensor device.
+    API keys are exclusively stored as salted SHA-256 hashes.
+    Plaintext API keys are never stored on the server or displayed after issuance.
+    """
+    __tablename__ = "sensor_enrollments"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    sensor_id = Column(String(64), unique=True, nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    api_key_hash = Column(String(128), unique=True, nullable=False, index=True)
+    api_key_prefix = Column(String(32), nullable=False)
+    owner_email = Column(String(255), nullable=False, index=True)
+    user_id = Column(String(64), nullable=True, index=True)
+    status = Column(String(30), nullable=False, default="ACTIVE", index=True)  # "ACTIVE", "REVOKED"
+
+    last_seen_at = Column(DateTime(timezone=True), nullable=True)
+    last_ip = Column(String(45), nullable=True)
+    sensor_version = Column(String(30), nullable=True)
+    hostname = Column(String(100), nullable=True)
+
+    packets_uploaded = Column(BigInteger, nullable=False, default=0)
+    flows_uploaded = Column(Integer, nullable=False, default=0)
+    alerts_uploaded = Column(Integer, nullable=False, default=0)
+
+    # Remote agent control state
+    target_state = Column(String(30), nullable=False, default="STOPPED")  # "RUNNING" or "STOPPED"
+    actual_state = Column(String(30), nullable=False, default="STOPPED")  # Reported by agent
+    target_interface = Column(String(100), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+    def to_dict(self):
+        """Convert ORM model to dictionary (strictly excludes api_key_hash)."""
+        return {
+            "id": self.id,
+            "sensor_id": self.sensor_id,
+            "name": self.name,
+            "api_key_prefix": self.api_key_prefix,
+            "owner_email": self.owner_email,
+            "user_id": self.user_id,
+            "status": self.status,
+            "target_state": self.target_state,
+            "actual_state": self.actual_state,
+            "target_interface": self.target_interface,
+            "last_seen_at": self.last_seen_at.isoformat() if self.last_seen_at else None,
+            "last_ip": self.last_ip,
+            "sensor_version": self.sensor_version,
+            "hostname": self.hostname,
+            "packets_uploaded": self.packets_uploaded,
+            "flows_uploaded": self.flows_uploaded,
+            "alerts_uploaded": self.alerts_uploaded,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "revoked_at": self.revoked_at.isoformat() if self.revoked_at else None,
+        }
+
+
+class SensorIngestRecordModel(Base):
+    """
+    Audit and idempotency record tracking ingested metadata records from remote sensors.
+    Prevents duplicate processing and replay of previously ingested batches.
+    """
+    __tablename__ = "sensor_ingest_records"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    sensor_id = Column(String(64), nullable=False, index=True)
+    record_id = Column(String(128), nullable=False, index=True)
+    record_type = Column(String(30), nullable=False)
+    ingested_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("sensor_id", "record_id", name="uq_sensor_record"),
+        Index("idx_sensor_ingest_lookup", "sensor_id", "record_id"),
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "sensor_id": self.sensor_id,
+            "record_id": self.record_id,
+            "record_type": self.record_type,
+            "ingested_at": self.ingested_at.isoformat() if self.ingested_at else None,
+        }

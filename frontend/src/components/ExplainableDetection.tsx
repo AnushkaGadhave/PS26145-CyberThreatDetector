@@ -62,7 +62,7 @@ export const ExplainableDetection: React.FC = () => {
             </h2>
 
             <p className="text-base sm:text-lg text-[#A5A5BE] font-sans leading-relaxed">
-              Opaque risk scores trigger alert fatigue and wasted incident triage. NETRA inspects mathematical flow telemetry, attaching explicit behavioral features and calibrated confidence bands to every detection.
+              Opaque risk scores trigger alert fatigue and wasted incident triage. ThreatTrack inspects mathematical flow telemetry, attaching explicit behavioral features and calibrated confidence bands to every detection.
             </p>
 
             <div className="space-y-4 pt-2">
@@ -99,7 +99,7 @@ export const ExplainableDetection: React.FC = () => {
             <div className="pt-2 text-[11px] font-mono text-[#A5A5BE]/70 flex items-center gap-2">
               <Info className="w-3.5 h-3.5 text-[#39D7FF] shrink-0" />
               <span>
-                Simulated live triage card shown for conceptual demonstration. Detections represent model suspicion.
+                Detections represent model suspicion.
               </span>
             </div>
           </div>

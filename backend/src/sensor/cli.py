@@ -7,6 +7,7 @@ Provides terminal controls for:
 - Inspecting the local metadata queue and disk spool
 """
 
+import os
 import sys
 import time
 import json
@@ -34,7 +35,7 @@ logger = logging.getLogger("netra.sensor.cli")
 def print_banner():
     banner = r"""
 ========================================================================
-   NETRA - Local Windows Network Threat Sensor (Passive Sniffer)
+   ThreatTrack - Local Windows Network Threat Sensor (Passive Sniffer)
    AI-Based Threat Detection in Unidirectional IP Traffic (SIH PS 26145)
 ========================================================================
 [CRITICAL SAFETY POLICY]
@@ -118,7 +119,7 @@ def cmd_inspect_queue(sensor: WindowsSensor):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="NETRA Local Windows Passive Sensor - Live Network Threat Telemetry (SIH PS 26145)"
+        description="ThreatTrack Local Windows Passive Sensor - Live Network Threat Telemetry (SIH PS 26145)"
     )
     parser.add_argument(
         "--list-interfaces", "-l",
@@ -164,13 +165,55 @@ def main():
         action="store_true",
         help="Inspect local metadata queue status and recent queued records, then exit"
     )
+    parser.add_argument(
+        "--backend-url",
+        type=str,
+        default=os.getenv("THREATTRACK_BACKEND_URL", os.getenv("NETRA_BACKEND_URL", None)),
+        help="Public HTTPS backend URL for telemetry transmission (or env THREATTRACK_BACKEND_URL / NETRA_BACKEND_URL)"
+    )
+    parser.add_argument(
+        "--api-key",
+        type=str,
+        default=os.getenv("THREATTRACK_SENSOR_API_KEY", os.getenv("NETRA_SENSOR_API_KEY", None)),
+        help="Sensor API key for cloud authentication (or env THREATTRACK_SENSOR_API_KEY / NETRA_SENSOR_API_KEY)"
+    )
+    parser.add_argument(
+        "--sensor-id",
+        type=str,
+        default=os.getenv("THREATTRACK_SENSOR_ID", os.getenv("NETRA_SENSOR_ID", None)),
+        help="Custom sensor device identifier matching enrollment ID (or env THREATTRACK_SENSOR_ID / NETRA_SENSOR_ID)"
+    )
 
     args = parser.parse_args()
+
+    # Automatically inspect sensor_config.json in current directory or project root
+    for candidate in [Path("sensor_config.json"), Path(__file__).resolve().parent.parent.parent / "sensor_config.json"]:
+        if candidate.exists():
+            try:
+                with open(candidate, "r", encoding="utf-8") as f:
+                    cfg_json = json.load(f)
+                    if not args.backend_url and cfg_json.get("backend_url"):
+                        args.backend_url = cfg_json["backend_url"]
+                    if not args.api_key and cfg_json.get("api_key"):
+                        args.api_key = cfg_json["api_key"]
+                    if not args.sensor_id and cfg_json.get("sensor_id"):
+                        args.sensor_id = cfg_json["sensor_id"]
+                    if not args.interface and cfg_json.get("interface"):
+                        args.interface = cfg_json["interface"]
+                break
+            except Exception as e:
+                logger.warning(f"Failed to parse configuration file {candidate}: {e}")
 
     if args.list_interfaces:
         print_banner()
         cmd_list_interfaces()
         return
+
+    enable_transmission = bool(args.backend_url and args.api_key)
+
+    config_kwargs = {}
+    if args.sensor_id:
+        config_kwargs["sensor_id"] = args.sensor_id
 
     config = SensorConfig(
         interface=args.interface,
@@ -178,7 +221,11 @@ def main():
         flow_timeout=args.flow_timeout,
         queue_spool_dir=args.spool_dir,
         enable_detection=not args.no_ml,
-        enable_feature_validation=not args.no_validation
+        enable_feature_validation=not args.no_validation,
+        enable_remote_transmission=enable_transmission,
+        remote_backend_url=args.backend_url or "http://127.0.0.1:8000",
+        sensor_api_key=args.api_key,
+        **config_kwargs
     )
 
     sensor = WindowsSensor(config=config)
@@ -198,7 +245,7 @@ def main():
         if not stop_event:
             stop_event = True
             print("\n[!] Shutdown signal received. Finalizing in-flight flows and queueing metadata...")
-            sensor.stop()
+            sensor.shutdown()
 
     signal.signal(signal.SIGINT, handle_signal)
 
@@ -206,7 +253,12 @@ def main():
     print(f"[*] Starting sensor on interface: {args.interface or 'Auto-Select'}...")
     res = sensor.start(args.interface)
     if not res.get("success"):
-        print(f"\n[ERROR] Failed to start sensor: {res.get('message')}")
+        err_msg = res.get('message', 'Unknown error')
+        print(f"\n[ERROR] Failed to start sensor: {err_msg}")
+        if "permission" in err_msg.lower() or "admin" in err_msg.lower() or "winerror 5" in err_msg.lower():
+            print("\n[REMEDIATION] Windows Npcap requires elevated privileges to capture raw network frames.")
+            print("  Option 1: Run your terminal as Administrator, then re-execute this command.")
+            print("  Option 2: Run the elevated launcher: powershell -ExecutionPolicy Bypass -File scripts/launch_sensor_elevated.ps1")
         sys.exit(1)
 
     print(f"[+] Passive capture active on: {sensor.actual_interface}")
@@ -240,7 +292,7 @@ def main():
             sensor.stop()
 
     print("\n" + "=" * 60)
-    print("NETRA SENSOR RUN COMPLETE")
+    print("THREATTRACK SENSOR RUN COMPLETE")
     print("=" * 60)
     final_status = sensor.get_status()
     print(f"Interface:            {final_status['interface']}")

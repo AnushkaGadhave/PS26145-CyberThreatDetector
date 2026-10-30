@@ -98,7 +98,7 @@ export const FlowsPage: React.FC<FlowsPageProps> = ({
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `netra_flows_${Date.now()}.csv`);
+    link.setAttribute("download", `threattrack_flows_${Date.now()}.csv`);
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -357,9 +357,9 @@ export const FlowsPage: React.FC<FlowsPageProps> = ({
                   <tr>
                     <td colSpan={10} className="py-16 text-center text-[#A5A5BE] font-mono">
                       <Network className="w-8 h-8 text-[#39D7FF] mx-auto mb-2 opacity-50" />
-                      <p className="text-sm font-semibold text-[#F5F5F7]">No network flows observed yet</p>
+                      <p className="text-sm font-semibold text-[#F5F5F7]">No network events yet</p>
                       <p className="text-xs text-[#A5A5BE] mt-1 max-w-md mx-auto">
-                        Passive monitoring will assemble and display real flows as network packets are captured on the host adapter.
+                        Flows will appear as packets are captured on the selected interface.
                       </p>
                     </td>
                   </tr>

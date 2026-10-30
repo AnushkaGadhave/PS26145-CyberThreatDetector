@@ -177,7 +177,10 @@ class FlowBuilder:
         consumer_callback: Optional[Callable[[FlowRecord], None]] = None,
         jsonl_path: Optional[Path] = None,
         csv_path: Optional[Path] = None,
-        max_active_flows: int = 50000
+        max_active_flows: int = 50000,
+        active_timeout_seconds: float = 15.0,
+        udp_timeout_seconds: float = 3.0,
+        tcp_idle_timeout_seconds: float = 10.0
     ):
         self.timeout_seconds = timeout_seconds
         self.flush_interval_seconds = flush_interval_seconds
@@ -185,6 +188,9 @@ class FlowBuilder:
         self.jsonl_path = Path(jsonl_path) if jsonl_path else None
         self.csv_path = Path(csv_path) if csv_path else None
         self.max_active_flows = max_active_flows
+        self.active_timeout_seconds = active_timeout_seconds
+        self.udp_timeout_seconds = udp_timeout_seconds
+        self.tcp_idle_timeout_seconds = tcp_idle_timeout_seconds
 
         self._active_flows: Dict[Tuple[str, str, Optional[int], Optional[int], str], _ActiveFlowState] = {}
         # Reverse key index for O(1) lookup of backward packets
@@ -233,11 +239,13 @@ class FlowBuilder:
 
             # Check if matching forward flow exists
             if fwd_key in self._active_flows:
-                flow = self._active_flows[fwd_key]
+                primary_key = fwd_key
+                flow = self._active_flows[primary_key]
                 flow.add_packet(timestamp, byte_len, is_forward=True, tcp_flags=tcp_flags)
             # Check if matching backward flow exists
             elif rev_key in self._active_flows:
-                flow = self._active_flows[rev_key]
+                primary_key = rev_key
+                flow = self._active_flows[primary_key]
                 flow.add_packet(timestamp, byte_len, is_forward=False, tcp_flags=tcp_flags)
             elif rev_key in self._reverse_index:
                 primary_key = self._reverse_index[rev_key]
@@ -249,24 +257,65 @@ class FlowBuilder:
                     # Force prune oldest flow if memory cap reached
                     self._evict_oldest_flow_unlocked()
 
-                new_flow = _ActiveFlowState(src_ip, dst_ip, src_port, dst_port, protocol, timestamp)
-                new_flow.add_packet(timestamp, byte_len, is_forward=True, tcp_flags=tcp_flags)
-                self._active_flows[fwd_key] = new_flow
-                self._reverse_index[rev_key] = fwd_key
+                flow = _ActiveFlowState(src_ip, dst_ip, src_port, dst_port, protocol, timestamp)
+                flow.add_packet(timestamp, byte_len, is_forward=True, tcp_flags=tcp_flags)
+                primary_key = fwd_key
+                self._active_flows[primary_key] = flow
+                self._reverse_index[rev_key] = primary_key
+
+            # Safe Immediate TCP Teardown Finalization:
+            # 1. Hard reset (RST >= 1): TCP connection is aborted immediately.
+            # 2. Mutual FIN (FIN >= 2): Both endpoints have signaled connection teardown.
+            flow_finalized = False
+            if flow.protocol == "TCP" and (flow.rst_count >= 1 or flow.fin_count >= 2):
+                self._finalize_and_emit_unlocked(primary_key)
+                flow_finalized = True
 
             # Periodic cleanup check
-            if self._last_flush_time is None:
-                self._last_flush_time = timestamp
-            elif timestamp - self._last_flush_time >= self.flush_interval_seconds:
-                self._flush_expired_unlocked(timestamp)
+            if not flow_finalized:
+                if self._last_flush_time is None:
+                    self._last_flush_time = timestamp
+                elif timestamp - self._last_flush_time >= self.flush_interval_seconds:
+                    self._flush_expired_unlocked(timestamp)
+
+    def flush_expired(self, current_time: Optional[float] = None):
+        """Thread-safe public flush of expired or closing flows."""
+        now = current_time if current_time is not None else time.time()
+        with self._lock:
+            self._flush_expired_unlocked(now)
 
     def _flush_expired_unlocked(self, current_time: float):
-        """Evict and finalize flows exceeding the inactivity timeout."""
+        """Evict and finalize flows exceeding inactivity, active duration, or teardown timeouts."""
         self._last_flush_time = current_time
         expired_keys = []
 
         for key, flow in self._active_flows.items():
-            if current_time - flow.last_seen >= self.timeout_seconds:
+            # 1. Active Timeout / Flow Slicing:
+            # If a flow has been continuously active for longer than active_timeout_seconds,
+            # slice and emit the flow so long-running streams (e.g. streaming, big downloads)
+            # are visible on the dashboard in real-time.
+            if self.active_timeout_seconds and (current_time - flow.start_time >= self.active_timeout_seconds):
+                expired_keys.append(key)
+                continue
+
+            # 2. Teardown / Inactivity Timeout:
+            if flow.protocol == "TCP":
+                if flow.fin_count >= 1:
+                    # Closing TCP grace period
+                    effective_timeout = 2.0
+                elif flow.forward_packets > 0 and flow.backward_packets > 0:
+                    # Completed bidirectional exchange that is now silent
+                    effective_timeout = self.tcp_idle_timeout_seconds
+                else:
+                    # Unfinished or one-way TCP connection
+                    effective_timeout = self.timeout_seconds
+            elif flow.protocol in ("UDP", "ICMP"):
+                # Connectionless protocols complete in milliseconds; expire quickly once quiet
+                effective_timeout = self.udp_timeout_seconds
+            else:
+                effective_timeout = self.timeout_seconds
+
+            if current_time - flow.last_seen >= effective_timeout:
                 expired_keys.append(key)
 
         for key in expired_keys:
