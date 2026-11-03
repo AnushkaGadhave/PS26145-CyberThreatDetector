@@ -98,9 +98,20 @@ export const DashboardContainer: React.FC<DashboardContainerProps> = ({
 
   const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const activeAlertReqRef = useRef<string | null>(null);
+  const isTelemetryLoadingRef = useRef<boolean>(false);
+  const backendAvailableRef = useRef<boolean>(true);
+
+  // Synchronize backend availability ref to avoid stale closures in polling timer
+  useEffect(() => {
+    backendAvailableRef.current = backendAvailable;
+  }, [backendAvailable]);
 
   // Fetch all real backend telemetry
   const loadTelemetry = useCallback(async (isSilent: boolean = false) => {
+    // Prevent overlapping telemetry requests
+    if (isTelemetryLoadingRef.current) return;
+    isTelemetryLoadingRef.current = true;
+
     if (!isSilent) setIsRefreshing(true);
     try {
       const [overviewData, flowListData, alertListData, capStatus] = await Promise.all([
@@ -126,6 +137,7 @@ export const DashboardContainer: React.FC<DashboardContainerProps> = ({
       setBackendAvailable(false);
       setConnectionError(err.message || 'Could not connect to backend API server.');
     } finally {
+      isTelemetryLoadingRef.current = false;
       setIsRefreshing(false);
     }
   }, [logout, onNavigate]);
@@ -135,16 +147,35 @@ export const DashboardContainer: React.FC<DashboardContainerProps> = ({
     loadTelemetry(false);
   }, [loadTelemetry]);
 
-  // Periodic polling to keep live data fresh
+  // Periodic polling to keep live data fresh (30s)
+  // Pauses when the browser tab is hidden or backend is unavailable
   useEffect(() => {
+    const POLL_INTERVAL_MS = 30000;
+
     refreshTimerRef.current = setInterval(() => {
+      // Pause polling if the tab is hidden or backend is known to be offline
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        return;
+      }
+      if (!backendAvailableRef.current) {
+        return;
+      }
       loadTelemetry(true);
-    }, 4000);
+    }, POLL_INTERVAL_MS);
+
+    // Refresh immediately when returning to the tab if backend is available
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && backendAvailableRef.current) {
+        loadTelemetry(true);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       if (refreshTimerRef.current) {
         clearInterval(refreshTimerRef.current);
       }
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [loadTelemetry]);
 

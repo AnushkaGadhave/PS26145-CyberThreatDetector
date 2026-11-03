@@ -650,6 +650,97 @@ class TestAuthenticationAndAuthorization(unittest.TestCase):
         me_after = self.client.get("/api/auth/me")
         self.assertEqual(me_after.status_code, 401)
 
+    def test_19_cross_user_dashboard_cache_isolation(self):
+        """Verify cross-user dashboard cache isolation at the HTTP API level.
+        User A's hot cached telemetry must NEVER leak to User B via GET /api/dashboard/overview.
+        """
+        # Register User A (Alice)
+        alice_email = "alice_cache_iso@test.com"
+        alice_pwd = "AlicePass2026!"
+        alice_reg = self.client.post("/api/auth/register", json={
+            "full_name": "Alice Cache",
+            "email": alice_email,
+            "password": alice_pwd
+        })
+        self.assertEqual(alice_reg.status_code, 201)
+        alice_user_id = alice_reg.json()["user"]["user_id"]
+
+        # Seed 2 flows and 1 alert owned by Alice
+        db = self.TestSession()
+        try:
+            for i in range(2):
+                FlowRepository.create_or_update(db, {
+                    "flow_id": f"flow_alice_cache_{i}",
+                    "timestamp": 1700000000.0 + i,
+                    "start_time": 1700000000.0 + i,
+                    "last_seen": 1700000005.0 + i,
+                    "src_ip": "172.16.1.10",
+                    "dst_ip": "8.8.8.8",
+                    "protocol": "TCP",
+                    "duration": 5.0,
+                    "total_packets": 20,
+                    "total_bytes": 2000,
+                    "traffic_context": "UNLABELED_LIVE",
+                    "user_id": alice_user_id
+                })
+            AlertRepository.create_or_update(db, {
+                "alert_id": "alert_alice_cache_01",
+                "timestamp": 1700000000.0,
+                "flow_id": "flow_alice_cache_0",
+                "src_ip": "172.16.1.10",
+                "dst_ip": "8.8.8.8",
+                "protocol": "TCP",
+                "threat_class": "BOTNET_C2",
+                "threat_category": "BOTNET_C2",
+                "confidence": 0.92,
+                "confidence_band": "HIGH_CONFIDENCE",
+                "severity": "HIGH",
+                "detector": "HybridPCA_Botnet_C2",
+                "model_status": "FULLY_COMPATIBLE",
+                "traffic_context": "UNLABELED_LIVE",
+                "user_id": alice_user_id
+            })
+        finally:
+            db.close()
+
+        # Alice queries /api/dashboard/overview -> Warms User A's cache
+        alice_ov1 = self.client.get("/api/dashboard/overview")
+        self.assertEqual(alice_ov1.status_code, 200)
+        alice_data1 = alice_ov1.json()
+        self.assertEqual(alice_data1["total_flows"], 2)
+        self.assertEqual(alice_data1["total_alerts"], 1)
+        self.assertEqual(alice_data1["severity_counts"]["HIGH"], 1)
+        self.assertEqual(alice_data1["top_source_ips"][0]["ip"], "172.16.1.10")
+
+        # Alice queries again -> hits User A's cache
+        alice_ov2 = self.client.get("/api/dashboard/overview")
+        self.assertEqual(alice_ov2.status_code, 200)
+        self.assertEqual(alice_ov2.json(), alice_data1)
+
+        # Register User B (Bob) - client session automatically switches to Bob
+        bob_email = "bob_cache_iso@test.com"
+        bob_pwd = "BobPass2026!"
+        bob_reg = self.client.post("/api/auth/register", json={
+            "full_name": "Bob Cache",
+            "email": bob_email,
+            "password": bob_pwd
+        })
+        self.assertEqual(bob_reg.status_code, 201)
+
+        # Bob immediately queries /api/dashboard/overview
+        # MUST return Bob's empty overview (0 flows, 0 alerts) and NOT Alice's hot cached data!
+        bob_ov = self.client.get("/api/dashboard/overview")
+        self.assertEqual(bob_ov.status_code, 200)
+        bob_data = bob_ov.json()
+        self.assertEqual(bob_data["total_flows"], 0, "Bob must not see Alice's cached flows")
+        self.assertEqual(bob_data["total_alerts"], 0, "Bob must not see Alice's cached alerts")
+        self.assertEqual(len(bob_data["top_source_ips"]), 0, "Bob must not see Alice's cached top source IPs")
+        self.assertEqual(bob_data["severity_counts"]["HIGH"], 0)
+
+        # Confirm Alice and Bob overviews are strictly distinct
+        self.assertNotEqual(alice_data1["total_flows"], bob_data["total_flows"])
+        self.assertNotEqual(alice_data1["top_source_ips"], bob_data["top_source_ips"])
+
 
 if __name__ == "__main__":
     unittest.main()

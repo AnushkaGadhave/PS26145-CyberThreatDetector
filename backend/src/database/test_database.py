@@ -18,6 +18,7 @@ if str(project_root) not in sys.path:
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 from src.database.models import Base, FlowModel, AlertModel, ModelStatusModel
 from src.database.repository import FlowRepository, AlertRepository, ModelStatusRepository, DashboardRepository
 
@@ -28,7 +29,12 @@ class TestDatabaseLayer(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         # Create an in-memory SQLite database for fast, isolated testing
-        cls.test_engine = create_engine("sqlite:///:memory:", echo=False)
+        cls.test_engine = create_engine(
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+            echo=False
+        )
         cls.TestSession = sessionmaker(autocommit=False, autoflush=False, bind=cls.test_engine)
         Base.metadata.create_all(bind=cls.test_engine)
 
@@ -192,6 +198,182 @@ class TestDatabaseLayer(unittest.TestCase):
         self.assertIn("severity_counts", overview)
         self.assertIn("threat_counts", overview)
         self.assertIn("top_source_ips", overview)
+
+    def test_08_overview_cache(self):
+        """8. Verify in-memory TTL caching and cache invalidation for get_overview."""
+        DashboardRepository.invalidate_overview_cache()
+        o1 = DashboardRepository.get_overview(self.db, user_id="test_user_cache")
+        self.assertIsNotNone(o1)
+
+        # Immediate second call should hit the cache
+        o2 = DashboardRepository.get_overview(self.db, user_id="test_user_cache")
+        self.assertEqual(o1, o2)
+
+        # Invalidation should clear cache cleanly
+        DashboardRepository.invalidate_overview_cache(user_id="test_user_cache")
+        o3 = DashboardRepository.get_overview(self.db, user_id="test_user_cache")
+        self.assertEqual(o1, o3)
+
+    def _seed_alpha_and_beta_data(self):
+        """Helper to seed distinct data for User Alpha and User Beta."""
+        alpha_id = "user_alpha_iso"
+        for i in range(3):
+            FlowRepository.create_or_update(self.db, {
+                "flow_id": f"flow_alpha_{i}",
+                "timestamp": 1700000000.0 + i,
+                "start_time": 1700000000.0 + i,
+                "last_seen": 1700000005.0 + i,
+                "src_ip": "192.168.1.100",
+                "dst_ip": "10.0.0.1",
+                "protocol": "TCP",
+                "duration": 5.0,
+                "total_packets": 10,
+                "total_bytes": 1000,
+                "traffic_context": "UNLABELED_LIVE",
+                "user_id": alpha_id
+            })
+        AlertRepository.create_or_update(self.db, {
+            "alert_id": "alert_alpha_01",
+            "timestamp": 1700000000.0,
+            "flow_id": "flow_alpha_0",
+            "src_ip": "192.168.1.100",
+            "dst_ip": "10.0.0.1",
+            "protocol": "TCP",
+            "threat_class": "DDoS",
+            "threat_category": "DDoS",
+            "confidence": 0.95,
+            "confidence_band": "HIGH_CONFIDENCE",
+            "severity": "CRITICAL",
+            "detector": "DDoS Detector",
+            "traffic_context": "UNLABELED_LIVE",
+            "user_id": alpha_id
+        })
+
+        beta_id = "user_beta_iso"
+        FlowRepository.create_or_update(self.db, {
+            "flow_id": "flow_beta_01",
+            "timestamp": 1700000100.0,
+            "start_time": 1700000100.0,
+            "last_seen": 1700000105.0,
+            "src_ip": "10.50.0.1",
+            "dst_ip": "172.16.0.1",
+            "protocol": "UDP",
+            "duration": 5.0,
+            "total_packets": 5,
+            "total_bytes": 500,
+            "traffic_context": "UNLABELED_LIVE",
+            "user_id": beta_id
+        })
+        AlertRepository.create_or_update(self.db, {
+            "alert_id": "alert_beta_01",
+            "timestamp": 1700000100.0,
+            "flow_id": "flow_beta_01",
+            "src_ip": "10.50.0.1",
+            "dst_ip": "172.16.0.1",
+            "protocol": "UDP",
+            "threat_class": "RECON_PORTSCAN",
+            "threat_category": "RECON_PORTSCAN",
+            "confidence": 0.85,
+            "confidence_band": "MEDIUM_CONFIDENCE",
+            "severity": "LOW",
+            "detector": "PortScan Detector",
+            "traffic_context": "UNLABELED_LIVE",
+            "user_id": beta_id
+        })
+
+    def test_09_cross_user_cache_isolation(self):
+        """9. Verify complete cross-user cache isolation, deep copy mutation defense, and targeted eviction."""
+        DashboardRepository.invalidate_overview_cache()
+        self._seed_alpha_and_beta_data()
+        alpha_id = "user_alpha_iso"
+        beta_id = "user_beta_iso"
+
+        # 1. Fetch User Alpha overview -> should reflect Alpha's data only
+        alpha_overview = DashboardRepository.get_overview(self.db, user_id=alpha_id)
+        self.assertEqual(alpha_overview["total_flows"], 3)
+        self.assertEqual(alpha_overview["total_alerts"], 1)
+        self.assertEqual(alpha_overview["severity_counts"]["CRITICAL"], 1)
+        self.assertEqual(alpha_overview["severity_counts"]["LOW"], 0)
+        self.assertEqual(alpha_overview["top_source_ips"][0]["ip"], "192.168.1.100")
+
+        # 2. Fetch User Beta overview -> should reflect Beta's data only (NOT Alpha's cached data)
+        beta_overview = DashboardRepository.get_overview(self.db, user_id=beta_id)
+        self.assertEqual(beta_overview["total_flows"], 1)
+        self.assertEqual(beta_overview["total_alerts"], 1)
+        self.assertEqual(beta_overview["severity_counts"]["LOW"], 1)
+        self.assertEqual(beta_overview["severity_counts"]["CRITICAL"], 0)
+        self.assertEqual(beta_overview["top_source_ips"][0]["ip"], "10.50.0.1")
+
+        # 3. Prove cross-user cache isolation: User Beta cannot receive User Alpha's cached data
+        self.assertNotEqual(alpha_overview, beta_overview)
+        self.assertNotEqual(alpha_overview["top_source_ips"], beta_overview["top_source_ips"])
+
+        # 4. Immediate re-fetch hits cache, preserving isolation
+        alpha_cached = DashboardRepository.get_overview(self.db, user_id=alpha_id)
+        beta_cached = DashboardRepository.get_overview(self.db, user_id=beta_id)
+        self.assertEqual(alpha_cached["total_flows"], 3)
+        self.assertEqual(beta_cached["total_flows"], 1)
+
+        # 5. In-place mutation resistance (deep copy defense)
+        alpha_cached["top_source_ips"].append({"ip": "99.99.99.99", "count": 999})
+        alpha_recheck = DashboardRepository.get_overview(self.db, user_id=alpha_id)
+        self.assertEqual(len(alpha_recheck["top_source_ips"]), 1)
+        self.assertNotEqual(alpha_recheck["top_source_ips"][-1]["ip"], "99.99.99.99")
+
+        # 6. Targeted cache invalidation: Alpha is evicted, Beta remains cached
+        DashboardRepository.invalidate_overview_cache(user_id=alpha_id)
+        from src.database.repository import _OVERVIEW_CACHE
+        self.assertNotIn(alpha_id, _OVERVIEW_CACHE)
+        self.assertIn(beta_id, _OVERVIEW_CACHE)
+
+    def test_10_concurrent_threads_cross_user_isolation(self):
+        """10. Verify concurrent multi-threaded requests remain isolated without race conditions."""
+        import concurrent.futures
+
+        DashboardRepository.invalidate_overview_cache()
+        self._seed_alpha_and_beta_data()
+        alpha_id = "user_alpha_iso"
+        beta_id = "user_beta_iso"
+
+        # Warm the cache for both users
+        ov_alpha = DashboardRepository.get_overview(self.db, user_id=alpha_id)
+        ov_beta = DashboardRepository.get_overview(self.db, user_id=beta_id)
+        self.assertEqual(ov_alpha["total_flows"], 3)
+        self.assertEqual(ov_beta["total_flows"], 1)
+
+        errors = []
+
+        def worker(uid, expected_flows, expected_ip):
+            try:
+                for _ in range(10):
+                    ov = DashboardRepository.get_overview(self.db, user_id=uid)
+                    if ov["total_flows"] != expected_flows:
+                        errors.append(f"User {uid} got {ov['total_flows']} flows, expected {expected_flows}")
+                    if not ov["top_source_ips"] or ov["top_source_ips"][0]["ip"] != expected_ip:
+                        actual_ip = ov["top_source_ips"][0]["ip"] if ov["top_source_ips"] else "None"
+                        errors.append(f"User {uid} got IP {actual_ip}, expected {expected_ip}")
+                    # Attempt in-place mutation to verify deepcopy protection under concurrency
+                    ov["total_flows"] = 999999
+                    ov["top_source_ips"].append({"ip": "corrupt_ip", "count": 9999})
+            except Exception as e:
+                errors.append(str(e))
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            futures = []
+            for _ in range(15):
+                futures.append(executor.submit(worker, alpha_id, 3, "192.168.1.100"))
+                futures.append(executor.submit(worker, beta_id, 1, "10.50.0.1"))
+            concurrent.futures.wait(futures)
+
+        self.assertEqual(len(errors), 0, f"Concurrent isolation errors: {errors}")
+
+        # Post-concurrency sanity check: cache remains pristine and isolated
+        final_alpha = DashboardRepository.get_overview(self.db, user_id=alpha_id)
+        final_beta = DashboardRepository.get_overview(self.db, user_id=beta_id)
+        self.assertEqual(final_alpha["total_flows"], 3)
+        self.assertEqual(final_beta["total_flows"], 1)
+        self.assertEqual(final_alpha["top_source_ips"][0]["ip"], "192.168.1.100")
+        self.assertEqual(final_beta["top_source_ips"][0]["ip"], "10.50.0.1")
 
 
 if __name__ == "__main__":

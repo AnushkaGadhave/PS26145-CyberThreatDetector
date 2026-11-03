@@ -71,7 +71,16 @@ export const LiveMonitorPage: React.FC<LiveMonitorPageProps> = ({
   const [backendConnectionLost, setBackendConnectionLost] = useState<boolean>(false);
   const [isDownloadingPackage, setIsDownloadingPackage] = useState<boolean>(false);
 
-  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const eventsTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const sensorTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isPollingEventsRef = useRef<boolean>(false);
+  const isPollingSensorsRef = useRef<boolean>(false);
+  const backendConnectionLostRef = useRef<boolean>(false);
+
+  // Synchronize backend connection state ref to prevent stale closures in polling loops
+  useEffect(() => {
+    backendConnectionLostRef.current = backendConnectionLost;
+  }, [backendConnectionLost]);
 
   // Initial load: interfaces, capture status, and enrolled sensors
   useEffect(() => {
@@ -89,6 +98,7 @@ export const LiveMonitorPage: React.FC<LiveMonitorPageProps> = ({
 
         if (mounted) {
           setBackendConnectionLost(false);
+          backendConnectionLostRef.current = false;
           setInterfaces(ifaceList);
           setCaptureStatus(statusData);
           setEnrolledSensors(sensorList);
@@ -116,6 +126,7 @@ export const LiveMonitorPage: React.FC<LiveMonitorPageProps> = ({
       } catch (err: any) {
         if (mounted) {
           setBackendConnectionLost(true);
+          backendConnectionLostRef.current = true;
           setActionError(err.message || 'Failed to connect to backend capture service.');
         }
       } finally {
@@ -132,23 +143,30 @@ export const LiveMonitorPage: React.FC<LiveMonitorPageProps> = ({
     };
   }, []);
 
-  // Polling loop for status, live local events, and remote sensor events
+  // Periodic polling loops:
+  // - Capture status & Live events: 15s (requirement: 15-30s)
+  // - Enrolled sensor list: 30s (requirement: 30s)
+  // Pauses automatically when tab is hidden or when backend connection is lost.
   useEffect(() => {
     let isPolling = true;
 
-    async function poll() {
+    async function pollStatusAndEvents() {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (backendConnectionLostRef.current) return;
+      if (isPollingEventsRef.current) return;
+      isPollingEventsRef.current = true;
+
       try {
-        const [statusData, localEvents, remoteEvents, sensorList] = await Promise.all([
+        const [statusData, localEvents, remoteEvents] = await Promise.all([
           api.getCaptureStatus(),
           api.getRecentLiveEvents(30).catch(() => []),
-          api.getRemoteSensorEvents(undefined, 30).catch(() => []),
-          api.getEnrolledSensors().catch(() => [])
+          api.getRemoteSensorEvents(undefined, 30).catch(() => [])
         ]);
 
         if (isPolling) {
           setBackendConnectionLost(false);
+          backendConnectionLostRef.current = false;
           if (statusData) setCaptureStatus(statusData);
-          if (sensorList) setEnrolledSensors(sensorList);
 
           const taggedLocal = (localEvents || []).map(e => ({
             ...e,
@@ -168,18 +186,59 @@ export const LiveMonitorPage: React.FC<LiveMonitorPageProps> = ({
       } catch {
         if (isPolling) {
           setBackendConnectionLost(true);
+          backendConnectionLostRef.current = true;
         }
+      } finally {
+        isPollingEventsRef.current = false;
       }
     }
 
-    poll();
-    pollTimerRef.current = setInterval(poll, 1500);
+    async function pollSensors() {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (backendConnectionLostRef.current) return;
+      if (isPollingSensorsRef.current) return;
+      isPollingSensorsRef.current = true;
+
+      try {
+        const sensorList = await api.getEnrolledSensors().catch(() => []);
+        if (isPolling && sensorList) {
+          setBackendConnectionLost(false);
+          backendConnectionLostRef.current = false;
+          setEnrolledSensors(sensorList);
+        }
+      } catch {
+        if (isPolling) {
+          setBackendConnectionLost(true);
+          backendConnectionLostRef.current = true;
+        }
+      } finally {
+        isPollingSensorsRef.current = false;
+      }
+    }
+
+    // Run initial queries after mount
+    pollStatusAndEvents();
+    pollSensors();
+
+    // 15 seconds for capture status and live telemetry
+    eventsTimerRef.current = setInterval(pollStatusAndEvents, 15000);
+    // 30 seconds for sensor fleet status
+    sensorTimerRef.current = setInterval(pollSensors, 30000);
+
+    // Refresh immediately when returning to the tab if connected
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && !backendConnectionLostRef.current) {
+        pollStatusAndEvents();
+        pollSensors();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       isPolling = false;
-      if (pollTimerRef.current) {
-        clearInterval(pollTimerRef.current);
-      }
+      if (eventsTimerRef.current) clearInterval(eventsTimerRef.current);
+      if (sensorTimerRef.current) clearInterval(sensorTimerRef.current);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, []);
 
@@ -1009,10 +1068,28 @@ export const LiveMonitorPage: React.FC<LiveMonitorPageProps> = ({
               )}
 
               <button
-                onClick={() => {
-                  api.getCaptureStatus().then(setCaptureStatus);
-                  api.getRecentLiveEvents(30).then(setEvents);
-                  api.getEnrolledSensors().then(setEnrolledSensors);
+                onClick={async () => {
+                  setBackendConnectionLost(false);
+                  backendConnectionLostRef.current = false;
+                  try {
+                    const [statusData, localEvents, remoteEvents, sensorList] = await Promise.all([
+                      api.getCaptureStatus(),
+                      api.getRecentLiveEvents(30).catch(() => []),
+                      api.getRemoteSensorEvents(undefined, 30).catch(() => []),
+                      api.getEnrolledSensors().catch(() => [])
+                    ]);
+                    if (statusData) setCaptureStatus(statusData);
+                    if (sensorList) setEnrolledSensors(sensorList);
+                    const taggedLocal = (localEvents || []).map(e => ({ ...e, source: 'LOCAL RX' }));
+                    const taggedRemote = (remoteEvents || []).map(e => ({
+                      ...e,
+                      source: e.source || (e.sensor_id ? `SENSOR: ${e.sensor_id}` : 'REMOTE')
+                    }));
+                    setEvents([...taggedLocal, ...taggedRemote].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)));
+                  } catch {
+                    setBackendConnectionLost(true);
+                    backendConnectionLostRef.current = true;
+                  }
                 }}
                 className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-[#10103D] hover:bg-[#15154A] border border-[#242452] text-[#A5A5BE] hover:text-[#F5F5F7] text-xs font-mono font-semibold transition-all cursor-pointer"
               >

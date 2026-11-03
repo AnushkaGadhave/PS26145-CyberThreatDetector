@@ -8,6 +8,8 @@ indexed queries against PostgreSQL for flows, alerts, model statuses, and dashbo
 
 import time
 import logging
+import copy
+import threading
 from typing import List, Dict, Any, Optional, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
@@ -201,8 +203,31 @@ class ModelStatusRepository:
         return rec
 
 
+# Module-level TTL cache for get_overview to prevent database connection exhaustion during high-frequency polling
+# Key: user_id (str for authenticated tenant, None for global admin view)
+# Value: (timestamp, overview_dict)
+_CACHE_LOCK = threading.Lock()
+_OVERVIEW_CACHE: Dict[Optional[str], Tuple[float, Dict[str, Any]]] = {}
+_OVERVIEW_CACHE_TTL: float = 5.0  # seconds
+
+
 class DashboardRepository:
     """Repository for aggregated metrics and dashboard overviews."""
+
+    @staticmethod
+    def invalidate_overview_cache(user_id: Optional[str] = None) -> None:
+        """
+        Invalidates overview cache for a specific user or globally.
+        When a tenant user_id is provided, evicts that user's cached snapshot
+        and the global admin snapshot (None), leaving all other users' caches intact.
+        When user_id is None, clears all cached views.
+        """
+        with _CACHE_LOCK:
+            if user_id is not None:
+                _OVERVIEW_CACHE.pop(user_id, None)
+                _OVERVIEW_CACHE.pop(None, None)
+            else:
+                _OVERVIEW_CACHE.clear()
 
     @staticmethod
     def get_alert_summary(db: Session, user_id: Optional[str] = None) -> Dict[str, Any]:
@@ -249,7 +274,14 @@ class DashboardRepository:
 
     @staticmethod
     def get_overview(db: Session, user_id: Optional[str] = None) -> Dict[str, Any]:
-        """Generates comprehensive dashboard overview telemetry scoped to the requesting user."""
+        """Generates comprehensive dashboard overview telemetry scoped strictly to the requesting user."""
+        now = time.time()
+        with _CACHE_LOCK:
+            cached = _OVERVIEW_CACHE.get(user_id)
+            if cached is not None and (now - cached[0]) < _OVERVIEW_CACHE_TTL:
+                # Return deep copy so callers cannot mutate the cached telemetry in place
+                return copy.deepcopy(cached[1])
+
         flow_query = db.query(FlowModel)
         alert_query = db.query(AlertModel)
 
@@ -262,7 +294,7 @@ class DashboardRepository:
 
         # In live capture replay, calculate relative to latest alert timestamp if present
         latest_alert = alert_query.order_by(AlertModel.timestamp.desc()).first()
-        now_ts = latest_alert.timestamp if latest_alert else time.time()
+        now_ts = latest_alert.timestamp if latest_alert else now
 
         alerts_5m = alert_query.filter(AlertModel.timestamp >= (now_ts - 300)).count()
         alerts_15m = alert_query.filter(AlertModel.timestamp >= (now_ts - 900)).count()
@@ -312,7 +344,7 @@ class DashboardRepository:
         # Model Statuses
         statuses = [m.to_dict() for m in ModelStatusRepository.get_all(db)]
 
-        return {
+        result = {
             "total_flows": total_flows,
             "total_alerts": total_alerts,
             "alerts_last_5_minutes": alerts_5m,
@@ -325,6 +357,16 @@ class DashboardRepository:
             "protocol_counts": proto_counts,
             "model_status": statuses,
         }
+
+        with _CACHE_LOCK:
+            # Prune expired keys if cache grows large
+            if len(_OVERVIEW_CACHE) > 500:
+                expired = [k for k, v in _OVERVIEW_CACHE.items() if (now - v[0]) >= _OVERVIEW_CACHE_TTL]
+                for k in expired:
+                    _OVERVIEW_CACHE.pop(k, None)
+            _OVERVIEW_CACHE[user_id] = (now, copy.deepcopy(result))
+
+        return copy.deepcopy(result)
 
 
 class UserRepository:

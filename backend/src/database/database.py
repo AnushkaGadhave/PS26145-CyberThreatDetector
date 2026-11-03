@@ -150,6 +150,7 @@ try:
             "pool_size": 5,
             "max_overflow": 5,
             "pool_recycle": 300,
+            "pool_timeout": 15,
             "connect_args": {"connect_timeout": 10},
         })
 

@@ -8,8 +8,8 @@
  */
 
 export function getApiBaseUrl(): string {
-  if (import.meta.env.VITE_API_BASE_URL) {
-    return import.meta.env.VITE_API_BASE_URL.trim().replace(/\/+$/, '');
+  if (typeof import.meta !== 'undefined' && (import.meta as any)?.env?.VITE_API_BASE_URL) {
+    return (import.meta as any).env.VITE_API_BASE_URL.trim().replace(/\/+$/, '');
   }
   if (typeof window !== 'undefined' && window.location) {
     // Align host dynamically (localhost vs 127.0.0.1) so HttpOnly session cookies are strictly Same-Site
@@ -134,10 +134,70 @@ export interface LiveStreamEventItem {
   source?: string;
 }
 
-async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
+// In-flight deduplication cache for concurrent idempotent GET requests
+const inFlightRequests = new Map<string, Promise<any>>();
+
+export function waitMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Parses the Retry-After header value into milliseconds.
+ * Supports both delta-seconds (e.g. "5") and HTTP-date strings.
+ * Clamps response to a sane upper limit of 30,000ms (30s).
+ */
+export function parseRetryAfter(headerValue: string | null): number | null {
+  if (!headerValue) return null;
+  const trimmed = headerValue.trim();
+  const seconds = Number(trimmed);
+  if (!isNaN(seconds) && seconds >= 0) {
+    return Math.min(Math.round(seconds * 1000), 30000);
+  }
+  const dateMs = Date.parse(trimmed);
+  if (!isNaN(dateMs)) {
+    const diff = dateMs - Date.now();
+    return Math.min(Math.max(diff, 0), 30000);
+  }
+  return null;
+}
+
+/**
+ * Calculates exponential backoff delay with random jitter (50ms - 250ms).
+ * Honors Retry-After header when present, adding jitter to prevent synchronized spikes.
+ * Delay progression:
+ * - Attempt 1: ~1000ms + jitter
+ * - Attempt 2: ~2000ms + jitter
+ * - Attempt 3: ~4000ms + jitter
+ */
+export function computeBackoffDelay(attempt: number, retryAfterMs: number | null): number {
+  const jitter = Math.floor(Math.random() * 200) + 50;
+  if (retryAfterMs !== null && retryAfterMs > 0) {
+    return retryAfterMs + jitter;
+  }
+  const baseMs = Math.pow(2, attempt - 1) * 1000;
+  return Math.min(baseMs + jitter, 10000);
+}
+
+function isIdempotentMethod(method: string): boolean {
+  return method === 'GET' || method === 'HEAD';
+}
+
+function isSensitiveAuthEndpoint(endpoint: string): boolean {
+  const sensitiveEndpoints = [
+    '/api/auth/login',
+    '/api/auth/register',
+    '/api/auth/logout'
+  ];
+  return sensitiveEndpoints.some((p) => endpoint.startsWith(p));
+}
+
+async function executeRequest<T>(
+  url: string,
+  endpoint: string,
+  options?: RequestInit,
+  token?: string | null
+): Promise<T> {
   const baseUrl = getApiBaseUrl();
-  const url = `${baseUrl}${endpoint}`;
-  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('threattrack_token') : null;
   const method = (options?.method || 'GET').toUpperCase();
   const hasBody = Boolean(options?.body);
   const defaultHeaders: Record<string, string> = {};
@@ -148,40 +208,113 @@ async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
     defaultHeaders['Authorization'] = `Bearer ${token}`;
   }
 
-  try {
-    const response = await fetch(url, {
-      ...options,
-      credentials: 'include',
-      headers: {
-        ...defaultHeaders,
-        ...options?.headers,
-      },
-    });
+  const mergedHeaders = {
+    ...defaultHeaders,
+    ...options?.headers,
+  };
 
-    if (!response.ok) {
-      let errorMsg = `Server error: ${response.status} ${response.statusText}`;
-      try {
-        const errorJson = await response.json();
-        if (errorJson.detail) {
-          errorMsg = typeof errorJson.detail === 'string' ? errorJson.detail : JSON.stringify(errorJson.detail);
-        }
-      } catch {
-        // use default errorMsg
+  const MAX_RETRIES = 3;
+  let attempt = 0;
+
+  while (true) {
+    try {
+      const response = await fetch(url, {
+        ...options,
+        credentials: 'include',
+        headers: mergedHeaders,
+      });
+
+      // Handle retryable HTTP statuses (429 Too Many Requests, 503 Service Unavailable)
+      const isRetryableStatus = response.status === 429 || response.status === 503;
+      const canRetry =
+        isRetryableStatus &&
+        attempt < MAX_RETRIES &&
+        isIdempotentMethod(method) &&
+        !isSensitiveAuthEndpoint(endpoint);
+
+      if (canRetry) {
+        attempt++;
+        const retryAfterHeader = response.headers?.get ? response.headers.get('Retry-After') : null;
+        const retryAfterMs = parseRetryAfter(retryAfterHeader);
+        const delay = computeBackoffDelay(attempt, retryAfterMs);
+        console.warn(
+          `[ThreatTrack API] HTTP ${response.status} on ${method} ${endpoint}. Retrying (attempt ${attempt}/${MAX_RETRIES}) after ${delay}ms...`
+        );
+        await waitMs(delay);
+        continue;
       }
-      const err = new Error(errorMsg) as Error & { status: number };
-      err.status = response.status;
+
+      if (!response.ok) {
+        let errorMsg = `Server error: ${response.status} ${response.statusText}`;
+        try {
+          const errorJson = await response.json();
+          if (errorJson.detail) {
+            errorMsg = typeof errorJson.detail === 'string' ? errorJson.detail : JSON.stringify(errorJson.detail);
+          }
+        } catch {
+          // use default errorMsg
+        }
+        const err = new Error(errorMsg) as Error & { status: number };
+        err.status = response.status;
+        throw err;
+      }
+
+      return await response.json();
+    } catch (err: any) {
+      const isNetworkError =
+        (err.name === 'TypeError' && err.message?.toLowerCase().includes('fetch')) ||
+        err.status === 0;
+
+      const canRetryNetwork =
+        isNetworkError &&
+        attempt < MAX_RETRIES &&
+        isIdempotentMethod(method) &&
+        !isSensitiveAuthEndpoint(endpoint);
+
+      if (canRetryNetwork) {
+        attempt++;
+        const delay = computeBackoffDelay(attempt, null);
+        console.warn(
+          `[ThreatTrack API] Transient network error on ${method} ${endpoint}. Retrying (attempt ${attempt}/${MAX_RETRIES}) after ${delay}ms...`
+        );
+        await waitMs(delay);
+        continue;
+      }
+
+      if (isNetworkError) {
+        const connErr = new Error('Backend unavailable. Could not connect to API server at ' + baseUrl) as Error & { status: number };
+        connErr.status = 0;
+        throw connErr;
+      }
       throw err;
     }
-
-    return await response.json();
-  } catch (err: any) {
-    if (err.name === 'TypeError' && err.message.includes('fetch')) {
-      const connErr = new Error('Backend unavailable. Could not connect to API server at ' + baseUrl) as Error & { status: number };
-      connErr.status = 0;
-      throw connErr;
-    }
-    throw err;
   }
+}
+
+async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  const baseUrl = getApiBaseUrl();
+  const url = `${baseUrl}${endpoint}`;
+  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('threattrack_token') : null;
+  const method = (options?.method || 'GET').toUpperCase();
+
+  // Deduplicate concurrent in-flight idempotent GET requests
+  if (isIdempotentMethod(method)) {
+    const dedupeKey = `${token || 'anon'}:${method}:${url}`;
+    const existing = inFlightRequests.get(dedupeKey);
+    if (existing) {
+      return existing as Promise<T>;
+    }
+
+    const inFlightPromise = executeRequest<T>(url, endpoint, options, token).finally(() => {
+      inFlightRequests.delete(dedupeKey);
+    });
+
+    inFlightRequests.set(dedupeKey, inFlightPromise);
+    return inFlightPromise;
+  }
+
+  // Non-idempotent operations (POST, PUT, DELETE) execute directly without deduplication
+  return executeRequest<T>(url, endpoint, options, token);
 }
 
 export const api = {
