@@ -138,13 +138,22 @@ async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const baseUrl = getApiBaseUrl();
   const url = `${baseUrl}${endpoint}`;
   const token = typeof localStorage !== 'undefined' ? localStorage.getItem('threattrack_token') : null;
+  const method = (options?.method || 'GET').toUpperCase();
+  const hasBody = Boolean(options?.body);
+  const defaultHeaders: Record<string, string> = {};
+  if (hasBody || ['POST', 'PUT', 'PATCH'].includes(method)) {
+    defaultHeaders['Content-Type'] = 'application/json';
+  }
+  if (token) {
+    defaultHeaders['Authorization'] = `Bearer ${token}`;
+  }
+
   try {
     const response = await fetch(url, {
       ...options,
       credentials: 'include',
       headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+        ...defaultHeaders,
         ...options?.headers,
       },
     });

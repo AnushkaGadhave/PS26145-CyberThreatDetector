@@ -116,6 +116,44 @@ class TestCORSConfiguration(unittest.TestCase):
             # Clean up temporary router from app
             app.router.routes = [r for r in app.router.routes if getattr(r, "path", None) != "/api/test-trigger-500-internal"]
 
+    def test_08_options_preflight_auth_me(self):
+        """Verify OPTIONS preflight on /api/auth/me succeeds with 200, credentials, and allow-headers."""
+        res = self.client.options(
+            "/api/auth/me",
+            headers={
+                "Origin": PROD_ORIGIN,
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "authorization, content-type",
+            }
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.headers.get("access-control-allow-origin"), PROD_ORIGIN)
+        self.assertEqual(res.headers.get("access-control-allow-credentials"), "true")
+        allowed_headers = res.headers.get("access-control-allow-headers", "").lower()
+        self.assertIn("authorization", allowed_headers)
+        self.assertIn("content-type", allowed_headers)
+        self.assertIn("GET", res.headers.get("access-control-allow-methods", ""))
+
+    def test_09_options_preflight_auth_me_variations(self):
+        """Verify OPTIONS preflight on /api/auth/me with various header permutations and casing."""
+        for req_headers in [
+            "content-type",
+            "authorization",
+            "Authorization, Content-Type",
+            "content-type, authorization",
+        ]:
+            res = self.client.options(
+                "/api/auth/me",
+                headers={
+                    "Origin": PROD_ORIGIN,
+                    "Access-Control-Request-Method": "GET",
+                    "Access-Control-Request-Headers": req_headers,
+                }
+            )
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(res.headers.get("access-control-allow-origin"), PROD_ORIGIN)
+            self.assertEqual(res.headers.get("access-control-allow-credentials"), "true")
+
 
 if __name__ == "__main__":
     unittest.main()
