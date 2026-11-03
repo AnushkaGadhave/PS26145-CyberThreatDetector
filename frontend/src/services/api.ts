@@ -9,7 +9,7 @@
 
 export function getApiBaseUrl(): string {
   if (import.meta.env.VITE_API_BASE_URL) {
-    return import.meta.env.VITE_API_BASE_URL;
+    return import.meta.env.VITE_API_BASE_URL.trim().replace(/\/+$/, '');
   }
   if (typeof window !== 'undefined' && window.location) {
     // Align host dynamically (localhost vs 127.0.0.1) so HttpOnly session cookies are strictly Same-Site

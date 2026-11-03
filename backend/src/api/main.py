@@ -9,6 +9,7 @@ model operational statuses, and aggregated dashboard analytics.
 
 import os
 import sys
+import re
 import logging
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -85,16 +86,40 @@ app = FastAPI(
 
 # CORS Configuration
 # Supports explicit CORS_ORIGINS as well as Vercel preview URLs via CORS_ORIGIN_REGEX
+# Normalizes origins by safely stripping surrounding quotes, whitespace, and trailing slashes.
 raw_cors_origins = os.getenv(
     "CORS_ORIGINS",
-    "http://localhost:5174,http://127.0.0.1:5174,http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000"
+    "https://threattrack.vercel.app,http://localhost:5174,http://127.0.0.1:5174,http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000"
 )
-origins = [o.strip() for o in raw_cors_origins.split(",") if o.strip()]
 
-# Explicitly ensure exact local development origins are permitted
-for dev_origin in ["http://localhost:5174", "http://127.0.0.1:5174", "http://localhost:5173", "http://127.0.0.1:5173"]:
-    if dev_origin not in origins:
-        origins.append(dev_origin)
+origins: list[str] = []
+for entry in raw_cors_origins.split(","):
+    cleaned = entry.strip().strip("'\"").rstrip("/")
+    if cleaned and cleaned not in origins:
+        origins.append(cleaned)
+
+# Always guarantee production Vercel frontend and local development origins are permitted
+guaranteed_origins = [
+    "https://threattrack.vercel.app",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+for origin in guaranteed_origins:
+    if origin not in origins:
+        origins.append(origin)
+
+origin_regex = os.getenv("CORS_ORIGIN_REGEX", r"https://.*\.vercel\.app")
+compiled_origin_regex = None
+if origin_regex:
+    try:
+        compiled_origin_regex = re.compile(origin_regex)
+    except Exception as e:
+        logger.warning(f"Failed to compile CORS_ORIGIN_REGEX '{origin_regex}': {e}")
+        compiled_origin_regex = re.compile(r"https://.*\.vercel\.app")
 
 cors_kwargs = {
     "allow_origins": origins,
@@ -102,12 +127,32 @@ cors_kwargs = {
     "allow_methods": ["*"],
     "allow_headers": ["*"],
     "expose_headers": ["Content-Disposition"],
+    "max_age": 86400,
 }
-origin_regex = os.getenv("CORS_ORIGIN_REGEX", r"https://.*\.vercel\.app")
 if origin_regex:
     cors_kwargs["allow_origin_regex"] = origin_regex
 
 app.add_middleware(CORSMiddleware, **cors_kwargs)
+
+
+def get_cors_headers_for_request(request: Request) -> dict[str, str]:
+    """Helper to compute CORS response headers for unhandled exception responses."""
+    origin = request.headers.get("origin")
+    if not origin:
+        return {}
+    normalized_origin = origin.strip().rstrip("/")
+    is_allowed = (
+        normalized_origin in origins
+        or (compiled_origin_regex is not None and bool(compiled_origin_regex.fullmatch(normalized_origin)))
+    )
+    if is_allowed:
+        return {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Expose-Headers": "Content-Disposition",
+            "Vary": "Origin",
+        }
+    return {}
 
 
 @app.get(
@@ -137,9 +182,11 @@ app.include_router(sensor_router)
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled exception on {request.method} {request.url}: {exc}", exc_info=True)
+    cors_headers = get_cors_headers_for_request(request)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"detail": "Internal server error occurred. Check server logs."}
+        content={"detail": "Internal server error occurred. Check server logs."},
+        headers=cors_headers
     )
 
 
