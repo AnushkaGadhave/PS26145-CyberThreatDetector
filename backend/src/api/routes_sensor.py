@@ -22,6 +22,7 @@ import json
 import time
 import logging
 import zipfile
+import threading
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
@@ -56,6 +57,11 @@ MAX_BATCH_RECORDS = 100
 FORBIDDEN_PAYLOAD_KEYS = {
     "payload", "raw_packet", "packet_hex", "payload_hex", "raw_data", "packet_bytes"
 }
+
+# Track explicit user commands issued via /control to prevent default enrollment state
+# from overriding an active locally-started sensor, while strictly preserving user-initiated STOPs.
+_EXPLICIT_SENSOR_COMMANDS: Dict[str, Dict[str, Any]] = {}
+_COMMAND_LOCK = threading.RLock()
 
 
 class SensorEnrollRequest(BaseModel):
@@ -98,7 +104,7 @@ def _validate_zero_payload(record: Dict[str, Any], path: str = "record") -> None
         "and zero-payload validation."
     )
 )
-async def ingest_sensor_batch(
+def ingest_sensor_batch(
     request: Request,
     body: SensorBatchIngestRequest,
     sensor: SensorEnrollmentModel = Depends(get_authenticated_sensor),
@@ -273,7 +279,63 @@ async def ingest_sensor_batch(
             rejected_count += 1
             errors.append(f"Record {record_id} has unrecognized record_type '{record_type}'.")
 
-    # 5. Update sensor operational telemetry
+    # 5. Extract reported active interface from ingested records if present
+    reported_interface = None
+    for r in body.records:
+        if isinstance(r, dict):
+            iface_val = r.get("interface")
+            if iface_val and iface_val != "heartbeat":
+                reported_interface = iface_val
+                break
+
+    # Determine explicit pending user command if any
+    with _COMMAND_LOCK:
+        pending_explicit = _EXPLICIT_SENSOR_COMMANDS.get(sensor.sensor_id)
+        has_explicit_stop = bool(
+            pending_explicit
+            and pending_explicit.get("active")
+            and pending_explicit.get("command") == "STOPPED"
+        )
+        has_explicit_start = bool(
+            pending_explicit
+            and pending_explicit.get("active")
+            and pending_explicit.get("command") == "RUNNING"
+        )
+
+    # State synchronization logic:
+    # 1. If an agent is actively RUNNING:
+    if body.actual_state == "RUNNING":
+        if has_explicit_stop:
+            # User explicitly requested STOP from dashboard: do NOT auto-sync to RUNNING.
+            # Enforce the user's explicit STOP command.
+            effective_target_state = "STOPPED"
+        else:
+            # No explicit user STOP: agent was started locally or confirmed running.
+            # Safely sync target_state to RUNNING so the default STOPPED state is never echoed back.
+            effective_target_state = "RUNNING"
+            if sensor.target_state != "RUNNING":
+                SensorEnrollmentRepository.set_target_state(
+                    db,
+                    sensor_id=sensor.sensor_id,
+                    target_state="RUNNING",
+                    target_interface=reported_interface or sensor.target_interface
+                )
+            if has_explicit_start and pending_explicit:
+                with _COMMAND_LOCK:
+                    pending_explicit["active"] = False
+
+    # 2. If an agent is STOPPED:
+    elif body.actual_state == "STOPPED":
+        effective_target_state = sensor.target_state or "STOPPED"
+        if has_explicit_stop and pending_explicit:
+            # The explicit STOP command has been acknowledged and satisfied by the agent
+            with _COMMAND_LOCK:
+                pending_explicit["active"] = False
+
+    else:
+        effective_target_state = sensor.target_state or "STOPPED"
+
+    # Update sensor operational telemetry
     updated_sensor = None
     try:
         updated_sensor = SensorEnrollmentRepository.update_telemetry(
@@ -290,13 +352,33 @@ async def ingest_sensor_batch(
     except Exception as tel_err:
         logger.warning(f"Failed to update sensor telemetry counters: {tel_err}")
 
-    logger.info(
-        f"Ingested batch '{body.batch_id}' from sensor '{sensor.sensor_id}': "
-        f"{accepted_count} accepted, {duplicate_count} duplicate, {rejected_count} rejected."
+    # Synchronize interface if agent reported an active interface and none was explicitly pinned
+    if reported_interface and (not updated_sensor or not updated_sensor.target_interface):
+        try:
+            SensorEnrollmentRepository.set_target_state(
+                db,
+                sensor_id=sensor.sensor_id,
+                target_state=updated_sensor.target_state if updated_sensor else effective_target_state,
+                target_interface=reported_interface
+            )
+        except Exception:
+            pass
+
+    current_target_state = (
+        effective_target_state
+        if has_explicit_stop
+        else (updated_sensor.target_state if updated_sensor else effective_target_state)
+    )
+    current_target_iface = (
+        updated_sensor.target_interface if updated_sensor
+        else getattr(sensor, "target_interface", None)
     )
 
-    current_target_state = updated_sensor.target_state if updated_sensor else getattr(sensor, "target_state", "STOPPED")
-    current_target_iface = updated_sensor.target_interface if updated_sensor else getattr(sensor, "target_interface", None)
+    logger.info(
+        f"Ingested batch '{body.batch_id}' from sensor '{sensor.sensor_id}': "
+        f"{accepted_count} accepted, {duplicate_count} duplicate, {rejected_count} rejected "
+        f"(state: {body.actual_state} -> command: {current_target_state}, iface: {current_target_iface})."
+    )
 
     return {
         "success": True,
@@ -445,6 +527,14 @@ def control_sensor(
         target_interface=payload.interface
     )
 
+    with _COMMAND_LOCK:
+        _EXPLICIT_SENSOR_COMMANDS[sensor_id] = {
+            "command": target_cmd,  # "RUNNING" or "STOPPED"
+            "interface": payload.interface,
+            "issued_at": time.time(),
+            "active": True
+        }
+
     logger.info(
         f"User {current_user.email} issued command '{payload.command}' to sensor '{sensor_id}' "
         f"(interface: {payload.interface or 'default'})."
@@ -530,7 +620,10 @@ def download_windows_sensor(
         if getattr(current_user, "role", None) != "admin" and sensor.user_id != current_user.user_id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: You do not have permission to download this sensor package.")
 
-    backend_url = f"{request.url.scheme}://{request.url.netloc}"
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    if "localhost" not in request.url.netloc and "127.0.0.1" not in request.url.netloc:
+        proto = "https"
+    backend_url = f"{proto}://{request.url.netloc}"
     backend_dir = Path(__file__).resolve().parent.parent.parent
 
     buf = io.BytesIO()
@@ -578,6 +671,7 @@ def download_windows_sensor(
             "        echo [X] Dependency installation failed. Check internet connection.\r\n"
             "        pause\r\n"
             "        exit /b\r\n"
+            "    )\r\n"
             ")\r\n\r\n"
             ":: 5. Launch ThreatTrack Sensor\r\n"
             "echo [*] Launching ThreatTrack Sensor Engine...\r\n"
@@ -600,7 +694,7 @@ def download_windows_sensor(
             "$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)\r\n"
             "if (-not $isAdmin) {\r\n"
             "    Write-Host '[*] Requesting UAC elevation...' -ForegroundColor Yellow\r\n"
-            "    Start-Process powershell -Verb RunAs -ArgumentList \"-NoExit -ExecutionPolicy Bypass -File `\"$($MyInvocation.MyCommand.Path)`\"\"\r\n"
+            "    Start-Process powershell -Verb RunAs -ArgumentList \"-NoExit -File `\"$($MyInvocation.MyCommand.Path)`\"\"\r\n"
             "    exit\r\n"
             "}\r\n"
             "python -m src.sensor.cli\r\n"

@@ -25,9 +25,10 @@ import urllib.request
 import urllib.error
 import socket
 from typing import Dict, List, Any, Optional, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from src.sensor.metadata_queue import LocalMetadataQueue, MetadataRecord
+from src.sensor.config import validate_telemetry_backend_url, mask_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -36,16 +37,23 @@ logger = logging.getLogger(__name__)
 class TransmitterConfig:
     """Configuration options for the outbound telemetry transmitter."""
     backend_url: str = "http://127.0.0.1:8000"
-    api_key: str = ""
+    api_key: str = field(default="", repr=False)
     sensor_id: str = "netra-sensor-win"
     sensor_version: str = "1.0.0-win"
     batch_size: int = 25
     flush_interval: float = 2.0
-    timeout_seconds: float = 5.0
+    timeout_seconds: float = 20.0
     max_retries: int = 5
     backoff_base: float = 1.0
     backoff_max: float = 30.0
     enable_transmission: bool = True
+
+    def __post_init__(self):
+        """Validate and enforce HTTPS security for telemetry endpoint."""
+        if self.enable_transmission and self.backend_url:
+            self.backend_url = validate_telemetry_backend_url(
+                self.backend_url, enable_remote=self.enable_transmission
+            )
 
 
 class SensorTransmitter:
@@ -79,6 +87,15 @@ class SensorTransmitter:
         self.consecutive_errors = 0
         self.last_error: Optional[str] = None
         self.auth_failed = False
+
+    def _sanitize_error(self, text: Optional[str]) -> Optional[str]:
+        """Ensures API keys, tokens, or credentials never appear in error strings or logs."""
+        if not text:
+            return text
+        sanitized = str(text)
+        if self.config.api_key and self.config.api_key in sanitized:
+            sanitized = sanitized.replace(self.config.api_key, "[REDACTED_KEY]")
+        return sanitized
 
     def get_current_status(self) -> str:
         """Returns the actual operational status reported by the sensor engine."""
@@ -248,7 +265,7 @@ class SensorTransmitter:
 
                 except urllib.error.HTTPError as http_err:
                     status_code = http_err.code
-                    self.last_error = f"HTTP {status_code}: {http_err.reason}"
+                    self.last_error = self._sanitize_error(f"HTTP {status_code}: {http_err.reason}")
                     self.consecutive_errors += 1
 
                     if status_code in (401, 403):
@@ -293,10 +310,10 @@ class SensorTransmitter:
 
                 except (urllib.error.URLError, TimeoutError, OSError) as net_err:
                     # Transient network outage or backend unreachable
-                    self.last_error = f"Network error: {net_err}"
+                    self.last_error = self._sanitize_error(f"Network error: {net_err}")
                     self.consecutive_errors += 1
                     logger.warning(
-                        f"[TRANSMITTER NETWORK OFFLINE] Could not reach backend ({net_err}). "
+                        f"[TRANSMITTER NETWORK OFFLINE] Could not reach backend ({self.last_error}). "
                         f"Requeuing {len(batch)} records. Local spool intact."
                     )
                     for rec in batch:
@@ -305,9 +322,9 @@ class SensorTransmitter:
 
                 except Exception as ex:
                     # General unexpected error
-                    self.last_error = f"Unexpected error: {ex}"
+                    self.last_error = self._sanitize_error(f"Unexpected error: {ex}")
                     self.consecutive_errors += 1
-                    logger.error(f"[TRANSMITTER ERROR] {ex}", exc_info=True)
+                    logger.error(f"[TRANSMITTER ERROR] {self.last_error}", exc_info=True)
                     for rec in batch:
                         self.queue.nack(rec.record_id, requeue=True)
                     self._apply_backoff()

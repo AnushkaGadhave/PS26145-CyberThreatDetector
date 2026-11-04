@@ -261,7 +261,7 @@ export const LiveMonitorPage: React.FC<LiveMonitorPageProps> = ({
           setShowEnrollModal(true);
           return;
         }
-        const res = await api.controlSensor(activeRemoteSensor.sensor_id, 'START', selectedInterface || undefined);
+        const res = await api.controlSensor(activeRemoteSensor.sensor_id, 'START', undefined);
         if (res.success) {
           setActionSuccess(res.message);
           const list = await api.getEnrolledSensors();
@@ -634,7 +634,7 @@ export const LiveMonitorPage: React.FC<LiveMonitorPageProps> = ({
       </div>
 
       {/* Diagnostic State 1: Sensor Not Installed Banner */}
-      {diagnosticState === 'SENSOR_NOT_INSTALLED' && (
+      {isLocalClient && diagnosticState === 'SENSOR_NOT_INSTALLED' && (
         <div className="p-4 rounded-2xl bg-[#FFB800]/10 border border-[#FFB800]/30 text-xs font-mono text-[#FFB800] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg">
           <div className="flex items-start gap-3">
             <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5 text-[#FFB800]" />

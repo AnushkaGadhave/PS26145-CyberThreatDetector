@@ -141,6 +141,7 @@ class WindowsSensor:
                     sensor_version=self.config.sensor_version,
                     batch_size=self.config.transmission_batch_size,
                     flush_interval=self.config.transmission_interval,
+                    timeout_seconds=20.0,
                     enable_transmission=True
                 )
                 self.transmitter = SensorTransmitter(
@@ -149,6 +150,7 @@ class WindowsSensor:
                     status_provider=lambda: self.status,
                     command_handler=self._handle_remote_command
                 )
+                self.transmitter.start()
             except Exception as t_err:
                 logger.warning(f"Failed to initialize remote transmitter: {t_err}")
 
@@ -269,7 +271,7 @@ class WindowsSensor:
             try:
                 self._thread.start()
                 self.status = "RUNNING"
-                if self.transmitter:
+                if self.transmitter and not self.transmitter.is_running():
                     self.transmitter.start()
                 logger.info(
                     f"ThreatTrack Local Windows Sensor active on interface '{self.actual_interface}'. "
@@ -293,17 +295,51 @@ class WindowsSensor:
                     "status": self.status
                 }
 
+    ALLOWED_COMMANDS = {"START", "STOP", "RUNNING", "STOPPED"}
+
     def _handle_remote_command(self, command: str, target_interface: Optional[str] = None):
-        """Dispatch remote control commands issued from the web dashboard."""
-        if not command:
+        """
+        Dispatch remote control commands issued from the web dashboard.
+        Strictly validates commands against ALLOWED_COMMANDS and validates target
+        interfaces against locally discovered host network adapters.
+        """
+        if not command or not isinstance(command, str):
             return
-        cmd_upper = command.upper()
-        if cmd_upper in ("START", "RUNNING") and self.status == "STOPPED":
-            logger.info(f"[REMOTE COMMAND] Received START command from dashboard for interface '{target_interface or 'default'}'")
-            self.start(target_interface)
-        elif cmd_upper in ("STOP", "STOPPED") and self.status in ("RUNNING", "STARTING"):
-            logger.info("[REMOTE COMMAND] Received STOP command from dashboard. Halting sniffer.")
-            self.stop(stop_transmitter=False)
+
+        cmd_upper = command.strip().upper()
+        if cmd_upper not in self.ALLOWED_COMMANDS:
+            logger.warning(
+                f"[SECURITY ALERT] Rejected unauthorized remote command '{command}'. "
+                f"Allowed commands are strictly: {sorted(list(self.ALLOWED_COMMANDS))}."
+            )
+            return
+
+        # 1. Handle START / RUNNING
+        if cmd_upper in ("START", "RUNNING"):
+            resolved_iface = None
+            if target_interface:
+                valid_iface = InterfaceManager.get_interface(target_interface)
+                if not valid_iface:
+                    logger.warning(
+                        f"[SECURITY ALERT] Rejected START command with invalid target interface: '{target_interface}'. "
+                        f"Interface does not exist among locally discovered adapters."
+                    )
+                    return
+                resolved_iface = valid_iface.name
+
+            if self.status == "STOPPED":
+                logger.info(f"[REMOTE COMMAND] Received validated START command for interface '{resolved_iface or 'default'}'")
+                self.start(resolved_iface)
+            else:
+                logger.debug(f"[REMOTE COMMAND] Sensor is already {self.status}; ignoring START.")
+
+        # 2. Handle STOP / STOPPED
+        elif cmd_upper in ("STOP", "STOPPED"):
+            if self.status in ("RUNNING", "STARTING"):
+                logger.info("[REMOTE COMMAND] Received validated STOP command from dashboard. Halting sniffer.")
+                self.stop(stop_transmitter=False)
+            else:
+                logger.debug(f"[REMOTE COMMAND] Sensor is already {self.status}; ignoring STOP.")
 
     def stop(self, stop_transmitter: bool = False) -> Dict[str, Any]:
         """
@@ -311,7 +347,7 @@ class WindowsSensor:
         Keeps transmitter alive by default so remote START commands can still be received.
         """
         with self._lock:
-            if self.status not in ("RUNNING", "STARTING"):
+            if self.status in ("STOPPED", "STOPPING"):
                 if stop_transmitter and self.transmitter:
                     self.transmitter.stop()
                 return {
