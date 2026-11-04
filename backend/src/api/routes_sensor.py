@@ -17,12 +17,16 @@ Security Guarantees:
 - Idempotent processing with deduplication tracking.
 """
 
+import os
 import io
+import re
 import json
 import time
+import secrets
 import logging
 import zipfile
 import threading
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
@@ -30,23 +34,27 @@ from fastapi import APIRouter, Request, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from src.database.database import get_db
-from src.database.models import UserModel, SensorEnrollmentModel
+from src.database.models import UserModel, SensorEnrollmentModel, SensorEnrollmentTokenModel
 from src.database.repository import (
     FlowRepository,
     AlertRepository,
     SensorEnrollmentRepository,
+    SensorEnrollmentTokenRepository,
     SensorIngestRepository,
 )
 from src.auth.dependencies import get_current_user, require_admin
 from src.auth.sensor_auth import (
     get_authenticated_sensor,
     generate_sensor_api_key,
+    hash_enrollment_token,
+    generate_enrollment_token,
     sensor_rate_limiter,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/sensor", tags=["Remote Sensor & Ingestion"])
+sensors_router = APIRouter(prefix="/api/sensors", tags=["Sensor Fleet Automation"])
 
 # Maximum allowable request body size in bytes (50 KB)
 MAX_INGEST_BODY_BYTES = 51200
@@ -67,6 +75,20 @@ _COMMAND_LOCK = threading.RLock()
 class SensorEnrollRequest(BaseModel):
     sensor_id: str = Field(..., min_length=3, max_length=64, description="Unique sensor identifier (e.g. 'sensor-lab-win-01')")
     name: str = Field(..., min_length=2, max_length=100, description="Human-readable device/reviewer label")
+
+
+class CreateEnrollmentTokenRequest(BaseModel):
+    name: str = Field(..., min_length=2, max_length=100, description="Sensor / device name (e.g. 'Lab Workstation')")
+    description: Optional[str] = Field(None, max_length=255, description="Optional sensor description or role")
+    device_label: Optional[str] = Field(None, max_length=100, description="Optional environment or device label (e.g. 'Windows 11 Laptop')")
+    sensor_id: Optional[str] = Field(None, min_length=3, max_length=64, description="Optional custom sensor identifier (slug). If omitted, an identifier is generated automatically.")
+    expires_in_minutes: Optional[int] = Field(30, ge=5, le=1440, description="Token expiration period in minutes (default: 30 mins)")
+
+
+class RedeemEnrollmentTokenRequest(BaseModel):
+    token: str = Field(..., min_length=10, max_length=256, description="One-time enrollment token issued by dashboard")
+    hostname: Optional[str] = Field(None, max_length=100, description="Local machine hostname")
+    sensor_version: Optional[str] = Field("1.0.0-win", max_length=30, description="Sensor agent version")
 
 
 class SensorRevokeRequest(BaseModel):
@@ -404,6 +426,266 @@ def ingest_sensor_batch(
 
 
 @router.post(
+    "/enrollment-token",
+    summary="Create One-Time Sensor Enrollment Token",
+    description="Generates a cryptographically random, single-use token for automatic sensor registration."
+)
+@router.post(
+    "/enrollments",
+    summary="Create One-Time Sensor Enrollment Token (Alias)",
+    description="Alias for /enrollment-token conforming to resource-oriented REST conventions."
+)
+def create_enrollment_token(
+    request: Request,
+    payload: CreateEnrollmentTokenRequest,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Authenticated dashboard endpoint to generate a short-lived, single-use enrollment token.
+    The enrollment token is shown once to the operator, who runs 'python enroll_sensor.py' on the Windows device.
+    Permanent API keys are NOT returned here.
+    """
+    # 1. Resolve or auto-generate sensor_id
+    if payload.sensor_id:
+        sensor_id = payload.sensor_id.strip().lower()
+        if not re.match(r"^[a-z0-9_-]{3,64}$", sensor_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Sensor ID slug must contain only lowercase alphanumeric characters, hyphens, and underscores (3-64 chars)."
+            )
+        existing = SensorEnrollmentRepository.get_by_sensor_id(db, sensor_id)
+        if existing and existing.status == "ACTIVE" and existing.user_id != current_user.user_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Sensor ID '{sensor_id}' is already registered to another user account."
+            )
+    else:
+        clean_name = re.sub(r"[^a-z0-9]+", "-", payload.name.lower()).strip("-")[:20] or "sensor"
+        sensor_id = None
+        for _ in range(10):
+            candidate = f"{clean_name}-{secrets.token_hex(3)}"
+            if not SensorEnrollmentRepository.get_by_sensor_id(db, candidate):
+                sensor_id = candidate
+                break
+        if not sensor_id:
+            sensor_id = f"sensor-{secrets.token_hex(6)}"
+
+    # 2. Generate secure one-time enrollment token
+    raw_token, token_hash = generate_enrollment_token()
+
+    # 3. Calculate expiration timestamp
+    duration_mins = payload.expires_in_minutes or 30
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=duration_mins)
+
+    # 4. Save token record in database
+    token_record = SensorEnrollmentTokenRepository.create_token(
+        db=db,
+        token_hash=token_hash,
+        sensor_id=sensor_id,
+        name=payload.name.strip(),
+        description=payload.description.strip() if payload.description else None,
+        device_label=payload.device_label.strip() if payload.device_label else None,
+        owner_email=current_user.email,
+        user_id=current_user.user_id,
+        expires_at=expires_at
+    )
+
+    # 5. Determine public backend URL
+    env_backend = os.getenv("THREATTRACK_BACKEND_URL", os.getenv("NETRA_BACKEND_URL"))
+    if env_backend:
+        backend_url = env_backend.rstrip("/")
+    else:
+        proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+        if "localhost" not in request.url.netloc and "127.0.0.1" not in request.url.netloc:
+            proto = "https"
+        backend_url = f"{proto}://{request.url.netloc}"
+
+    logger.info(
+        f"User {current_user.email} generated enrollment token for sensor '{sensor_id}' "
+        f"(expires in {duration_mins}m)"
+    )
+
+    return {
+        "success": True,
+        "message": "One-time enrollment token generated. Run 'python enroll_sensor.py' on the target device.",
+        "sensor_id": sensor_id,
+        "name": token_record.name,
+        "description": token_record.description,
+        "device_label": token_record.device_label,
+        "enrollment_token": raw_token,
+        "expires_at": token_record.expires_at.isoformat(),
+        "expires_in_seconds": int(duration_mins * 60),
+        "backend_url": backend_url,
+        "setup_command": f"python enroll_sensor.py --token {raw_token}"
+    }
+
+
+@router.post(
+    "/redeem-token",
+    summary="Redeem One-Time Sensor Enrollment Token",
+    description="Redeems a single-use enrollment token from a Windows sensor agent and issues unique permanent credentials."
+)
+@router.post(
+    "/enroll/redeem",
+    summary="Redeem One-Time Sensor Enrollment Token (Alias)",
+    description="Alias for /redeem-token."
+)
+def redeem_enrollment_token(
+    request: Request,
+    payload: RedeemEnrollmentTokenRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Public HTTPS endpoint called by a new Windows sensor executing 'python enroll_sensor.py'.
+    Validates and redeems the single-use token, issues a unique permanent API key,
+    and returns initial configuration.
+    """
+    client_ip = request.client.host if request.client else "unknown"
+
+    # Enforce HTTPS for non-loopback requests
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    is_loopback = client_ip in ("127.0.0.1", "localhost", "::1", "testclient")
+    if not is_loopback and proto != "https":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Insecure connection: Sensor enrollment requires HTTPS."
+        )
+
+    # 1. Compute hash of the token
+    token_str = payload.token.strip()
+    token_hash = hash_enrollment_token(token_str)
+
+    # 2. Inspect token record
+    token_record = SensorEnrollmentTokenRepository.get_by_token_hash(db, token_hash)
+    if not token_record:
+        logger.warning(f"Failed enrollment redemption from {client_ip}: token not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Invalid enrollment token. Check the token and try again."
+        )
+
+    if token_record.is_used:
+        logger.warning(
+            f"Failed enrollment redemption from {client_ip}: token for '{token_record.sensor_id}' already redeemed"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Enrollment token has already been redeemed and cannot be reused. Generate a new token from the dashboard."
+        )
+
+    now = datetime.now(timezone.utc)
+    token_exp = token_record.expires_at
+    if token_exp and token_exp.tzinfo is None:
+        token_exp = token_exp.replace(tzinfo=timezone.utc)
+    if token_exp and token_exp <= now:
+        logger.warning(
+            f"Failed enrollment redemption from {client_ip}: token for '{token_record.sensor_id}' expired at {token_record.expires_at}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Enrollment token has expired. Please generate a fresh token from the dashboard."
+        )
+
+    # 3. Atomically redeem token
+    redeemed = SensorEnrollmentTokenRepository.redeem_token(db, token_hash, redeemed_ip=client_ip)
+    if not redeemed:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Enrollment token was redeemed concurrently. Request failed."
+        )
+
+    # 4. Issue a permanent, cryptographically random sensor API key
+    raw_api_key, key_hash, key_prefix = generate_sensor_api_key()
+
+    # 5. Enroll sensor device in sensor_enrollments table
+    sensor = SensorEnrollmentRepository.enroll_sensor(
+        db=db,
+        sensor_id=redeemed.sensor_id,
+        name=redeemed.name,
+        description=redeemed.description,
+        device_label=redeemed.device_label,
+        api_key_hash=key_hash,
+        api_key_prefix=key_prefix,
+        owner_email=redeemed.owner_email,
+        user_id=redeemed.user_id
+    )
+
+    # Update operational metadata
+    SensorEnrollmentRepository.update_telemetry(
+        db=db,
+        sensor_id=sensor.sensor_id,
+        last_ip=client_ip,
+        sensor_version=payload.sensor_version,
+        hostname=payload.hostname
+    )
+
+    env_backend = os.getenv("THREATTRACK_BACKEND_URL", os.getenv("NETRA_BACKEND_URL"))
+    if env_backend:
+        backend_url = env_backend.rstrip("/")
+    else:
+        if "localhost" not in request.url.netloc and "127.0.0.1" not in request.url.netloc:
+            proto = "https"
+        backend_url = f"{proto}://{request.url.netloc}"
+
+    logger.info(
+        f"Sensor '{sensor.sensor_id}' successfully redeemed enrollment token from {client_ip} "
+        f"(Host: {payload.hostname or 'unknown'})"
+    )
+
+    return {
+        "success": True,
+        "message": f"Sensor '{sensor.sensor_id}' enrolled successfully. Generated sensor configuration.",
+        "sensor_id": sensor.sensor_id,
+        "name": sensor.name,
+        "api_key": raw_api_key,
+        "backend_url": backend_url,
+        "owner_email": sensor.owner_email
+    }
+
+
+# Secondary REST-compliant router endpoints (/api/sensors/...)
+@sensors_router.post(
+    "/enrollments",
+    summary="Create One-Time Sensor Enrollment Token (REST convention)",
+    description="Generates a cryptographically random, single-use token for automatic sensor registration."
+)
+def sensors_create_enrollment(
+    request: Request,
+    payload: CreateEnrollmentTokenRequest,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    return create_enrollment_token(request=request, payload=payload, current_user=current_user, db=db)
+
+
+@sensors_router.post(
+    "/enroll",
+    summary="Redeem One-Time Sensor Enrollment Token (REST convention)",
+    description="Redeems a single-use enrollment token from a Windows sensor agent and issues permanent credentials."
+)
+def sensors_redeem_enrollment(
+    request: Request,
+    payload: RedeemEnrollmentTokenRequest,
+    db: Session = Depends(get_db)
+):
+    return redeem_enrollment_token(request=request, payload=payload, db=db)
+
+
+@sensors_router.get(
+    "",
+    summary="List Sensors (REST convention)",
+    description="Lists enrolled sensors belonging to the authenticated user."
+)
+def sensors_list(
+    status: Optional[str] = None,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    return list_sensors(status=status, current_user=current_user, db=db)
+
+
+@router.post(
     "/enroll",
     summary="Enroll Sensor Device",
     description="Registers a new sensor device and generates a revocable API key for the authenticated user."
@@ -734,12 +1016,30 @@ def download_windows_sensor(
             "1. Ensure Npcap is installed with 'WinPcap API-compatible Mode' enabled.\r\n"
             "2. Double-click 'start_sensor.bat'. When Windows asks for UAC permission, click 'Yes'.\r\n"
             "3. Return to your web dashboard. Your computer will be detected and ready for Live Monitoring!\r\n\r\n"
+            "AUTOMATIC ENROLLMENT:\r\n"
+            "- If you have an enrollment token from the dashboard, simply run:\r\n"
+            "  python enroll_sensor.py --token <YOUR_TOKEN>\r\n"
+            "  This automatically generates and saves your credentials!\r\n\r\n"
             "SAFETY & PRIVACY GUARANTEE:\r\n"
             "- Passive, read-only packet capture only. Zero packet injection or probing.\r\n"
             "- Metadata only: no packet payloads, passwords, or raw bytes are stored or transmitted.\r\n"
             "- Telemetry is strictly isolated and accessible only to your authenticated user account.\r\n"
         )
         zf.writestr("ThreatTrack-Sensor/README.txt", readme_content)
+
+        # 5b. enroll_sensor.py
+        enroll_candidates = [
+            backend_dir / "enroll_sensor.py",
+            backend_dir.parent / "enroll_sensor.py",
+            backend_dir / "scripts" / "enroll_sensor.py"
+        ]
+        for ec in enroll_candidates:
+            if ec.exists():
+                try:
+                    zf.writestr("ThreatTrack-Sensor/enroll_sensor.py", ec.read_bytes())
+                    break
+                except Exception:
+                    pass
 
         # 6. Bundle source code required by the sensor
         src_root = backend_dir / "src"

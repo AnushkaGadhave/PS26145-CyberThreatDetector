@@ -19,6 +19,27 @@ from typing import Dict, List, Any, Optional, Union
 
 logger = logging.getLogger(__name__)
 
+# Forbidden keys that must NEVER be persisted or transmitted (Zero Payload & Zero Credential Policy)
+FORBIDDEN_PERSISTENCE_KEYS = {
+    # Packet payloads & raw frames
+    "payload", "raw_payload", "payload_bytes", "payload_hex", "raw_packet", "packet_data", "packet_bytes",
+    # Sensitive credentials & secrets
+    "api_key", "sensor_api_key", "secret", "token", "password", "auth", "authorization", "private_key"
+}
+
+
+def sanitize_metadata_dict(data: Any) -> Any:
+    """Recursively removes packet payloads and sensitive credentials from dictionaries and lists."""
+    if isinstance(data, dict):
+        return {
+            k: sanitize_metadata_dict(v)
+            for k, v in data.items()
+            if str(k).lower() not in FORBIDDEN_PERSISTENCE_KEYS
+        }
+    elif isinstance(data, (list, tuple)):
+        return [sanitize_metadata_dict(item) for item in data]
+    return data
+
 
 @dataclass
 class MetadataRecord:
@@ -41,8 +62,8 @@ class MetadataRecord:
     created_at: float = field(default_factory=time.time)
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert record to JSON-serializable dictionary."""
-        return asdict(self)
+        """Convert record to sanitized JSON-serializable dictionary."""
+        return sanitize_metadata_dict(asdict(self))
 
     def to_json(self) -> str:
         """Convert record to single-line JSON string."""
@@ -50,8 +71,12 @@ class MetadataRecord:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MetadataRecord":
-        """Reconstruct MetadataRecord from dictionary."""
-        return cls(**data)
+        """Reconstruct MetadataRecord from sanitized dictionary."""
+        sanitized = sanitize_metadata_dict(data)
+        # Filter to dataclass fields only
+        valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        filtered = {k: v for k, v in sanitized.items() if k in valid_fields}
+        return cls(**filtered)
 
 
 class LocalMetadataQueue:

@@ -56,6 +56,28 @@ def generate_sensor_api_key() -> Tuple[str, str, str]:
     return raw_api_key, key_hash, key_prefix
 
 
+def hash_enrollment_token(token: str) -> str:
+    """
+    Produce a cryptographically secure SHA-256 hash of a one-time enrollment token
+    combined with the server-side salt.
+    """
+    salted = f"{SENSOR_KEY_SALT}:enrollment:{token.strip()}".encode("utf-8")
+    return hashlib.sha256(salted).hexdigest()
+
+
+def generate_enrollment_token() -> Tuple[str, str]:
+    """
+    Generate a cryptographically random, single-use enrollment token.
+    Returns:
+        (raw_token, token_hash)
+    The raw_token is displayed to the user exactly once on the dashboard.
+    """
+    random_str = secrets.token_urlsafe(32)
+    raw_token = f"tt_enroll_{random_str}"
+    token_hash = hash_enrollment_token(raw_token)
+    return raw_token, token_hash
+
+
 class SensorRateLimiter:
     """
     Thread-safe sliding-window rate limiter per authenticated sensor.

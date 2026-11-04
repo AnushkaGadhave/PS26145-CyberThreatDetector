@@ -199,6 +199,47 @@ class TestSensorTransmitter(unittest.TestCase):
             self.transmitter.transmit_batch_sync(huge_records)
         self.assertIn("50 KB limit", str(ctx.exception))
 
+    def test_06_enforce_https_for_remote_backend(self):
+        """6. Verify HTTPS is strictly enforced for remote endpoints, rejecting insecure HTTP."""
+        # Non-HTTPS remote URL must raise ValueError
+        with self.assertRaises(ValueError) as ctx:
+            TransmitterConfig(
+                backend_url="http://threattrack-api.example.com",
+                enable_transmission=True
+            )
+        self.assertIn("must use HTTPS", str(ctx.exception))
+
+        # HTTPS remote URL must be accepted
+        valid_remote = TransmitterConfig(
+            backend_url="https://threattrack-api.example.com",
+            enable_transmission=True
+        )
+        self.assertEqual(valid_remote.backend_url, "https://threattrack-api.example.com")
+
+        # Local loopback HTTP is allowed for testing
+        local_cfg = TransmitterConfig(
+            backend_url="http://127.0.0.1:8000",
+            enable_transmission=True
+        )
+        self.assertEqual(local_cfg.backend_url, "http://127.0.0.1:8000")
+
+    def test_07_api_key_masked_in_repr_and_errors(self):
+        """7. Verify API keys are excluded from repr and redacted from error strings."""
+        secret_key = "sensitive_sensor_api_token_999"
+        cfg = TransmitterConfig(
+            backend_url="http://127.0.0.1:8000",
+            api_key=secret_key
+        )
+        # repr(cfg) must NOT contain secret_key
+        self.assertNotIn(secret_key, repr(cfg))
+
+        # Error sanitization
+        tx = SensorTransmitter(self.queue, cfg)
+        error_with_key = f"Failed to connect using key {secret_key} on host"
+        sanitized = tx._sanitize_error(error_with_key)
+        self.assertNotIn(secret_key, sanitized)
+        self.assertIn("[REDACTED_KEY]", sanitized)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

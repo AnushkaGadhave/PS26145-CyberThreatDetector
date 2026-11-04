@@ -555,7 +555,33 @@ export const api = {
     return request(`/api/sensor/list${status ? `?status=${encodeURIComponent(status)}` : ''}`);
   },
 
-  /** Enroll a new remote Windows sensor device */
+  /** Generate a one-time enrollment token for automatic Windows sensor setup */
+  async createEnrollmentToken(payload: {
+    name: string;
+    description?: string;
+    device_label?: string;
+    sensor_id?: string;
+    expires_in_minutes?: number;
+  }): Promise<{
+    success: boolean;
+    message: string;
+    sensor_id: string;
+    name: string;
+    description?: string;
+    device_label?: string;
+    enrollment_token: string;
+    expires_at: string;
+    expires_in_seconds: number;
+    backend_url: string;
+    setup_command: string;
+  }> {
+    return request('/api/sensor/enrollment-token', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /** Enroll a new remote Windows sensor device (direct legacy key) */
   async enrollSensor(payload: { sensor_id: string; name: string }): Promise<{
     success: boolean;
     message: string;
@@ -644,6 +670,8 @@ export interface EnrolledSensor {
   id: number;
   sensor_id: string;
   name: string;
+  description?: string | null;
+  device_label?: string | null;
   api_key_prefix: string;
   owner_email: string;
   status: 'ACTIVE' | 'REVOKED';

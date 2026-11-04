@@ -290,6 +290,8 @@ class SensorEnrollmentModel(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     sensor_id = Column(String(64), unique=True, nullable=False, index=True)
     name = Column(String(100), nullable=False)
+    description = Column(String(255), nullable=True)
+    device_label = Column(String(100), nullable=True)
     api_key_hash = Column(String(128), unique=True, nullable=False, index=True)
     api_key_prefix = Column(String(32), nullable=False)
     owner_email = Column(String(255), nullable=False, index=True)
@@ -319,6 +321,8 @@ class SensorEnrollmentModel(Base):
             "id": self.id,
             "sensor_id": self.sensor_id,
             "name": self.name,
+            "description": self.description,
+            "device_label": self.device_label,
             "api_key_prefix": self.api_key_prefix,
             "owner_email": self.owner_email,
             "user_id": self.user_id,
@@ -335,6 +339,46 @@ class SensorEnrollmentModel(Base):
             "alerts_uploaded": self.alerts_uploaded,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "revoked_at": self.revoked_at.isoformat() if self.revoked_at else None,
+        }
+
+
+class SensorEnrollmentTokenModel(Base):
+    """
+    Represents a short-lived, single-use enrollment token used to register a new
+    sensor device without manual configuration file editing.
+    Tokens are stored strictly as salted SHA-256 hashes.
+    """
+    __tablename__ = "sensor_enrollment_tokens"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    token_hash = Column(String(128), unique=True, nullable=False, index=True)
+    sensor_id = Column(String(64), nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    description = Column(String(255), nullable=True)
+    device_label = Column(String(100), nullable=True)
+    owner_email = Column(String(255), nullable=False, index=True)
+    user_id = Column(String(64), nullable=False, index=True)
+
+    is_used = Column(Boolean, nullable=False, default=False, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    redeemed_at = Column(DateTime(timezone=True), nullable=True)
+    redeemed_ip = Column(String(45), nullable=True)
+
+    def to_dict(self):
+        """Convert ORM model to dictionary (strictly excludes token_hash)."""
+        return {
+            "id": self.id,
+            "sensor_id": self.sensor_id,
+            "name": self.name,
+            "description": self.description,
+            "device_label": self.device_label,
+            "owner_email": self.owner_email,
+            "user_id": self.user_id,
+            "is_used": self.is_used,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+            "redeemed_at": self.redeemed_at.isoformat() if self.redeemed_at else None,
         }
 
 

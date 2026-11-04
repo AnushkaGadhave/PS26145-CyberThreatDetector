@@ -16,7 +16,8 @@ import {
   Copy,
   Check,
   WifiOff,
-  Download
+  Download,
+  Terminal
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { downloadBlob } from '../../utils/exportUtils';
@@ -58,8 +59,25 @@ export const LiveMonitorPage: React.FC<LiveMonitorPageProps> = ({
   const [sourceFilter, setSourceFilter] = useState<'all' | 'local' | 'remote'>('all');
   const [selectedSensorFilter, setSelectedSensorFilter] = useState<string>('');
   const [showEnrollModal, setShowEnrollModal] = useState<boolean>(false);
+  const [enrollTab, setEnrollTab] = useState<'token' | 'legacy'>('token');
   const [newSensorId, setNewSensorId] = useState<string>('');
   const [newSensorName, setNewSensorName] = useState<string>('');
+  const [newSensorDescription, setNewSensorDescription] = useState<string>('');
+  const [newSensorDeviceLabel, setNewSensorDeviceLabel] = useState<string>('');
+  const [tokenEnrollResult, setTokenEnrollResult] = useState<{
+    sensor_id: string;
+    name: string;
+    description?: string;
+    device_label?: string;
+    enrollment_token: string;
+    expires_at: string;
+    expires_in_seconds: number;
+    setup_command: string;
+    backend_url: string;
+  } | null>(null);
+  const [copiedToken, setCopiedToken] = useState<boolean>(false);
+  const [copiedTokenCmd, setCopiedTokenCmd] = useState<boolean>(false);
+  const [isGeneratingToken, setIsGeneratingToken] = useState<boolean>(false);
   const [enrollResult, setEnrollResult] = useState<{ sensor: EnrolledSensor; api_key: string } | null>(null);
   const [copiedKey, setCopiedKey] = useState<boolean>(false);
   const [copiedCmd, setCopiedCmd] = useState<boolean>(false);
@@ -348,6 +366,46 @@ export const LiveMonitorPage: React.FC<LiveMonitorPageProps> = ({
     }
   };
 
+  const handleCreateEnrollmentToken = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newSensorName.trim()) return;
+    setIsGeneratingToken(true);
+    setActionError(null);
+    try {
+      const res = await api.createEnrollmentToken({
+        name: newSensorName.trim(),
+        description: newSensorDescription.trim() || undefined,
+        device_label: newSensorDeviceLabel.trim() || undefined,
+        sensor_id: newSensorId.trim().toLowerCase() || undefined,
+        expires_in_minutes: 30
+      });
+      setTokenEnrollResult(res);
+      setActionSuccess("One-time enrollment token generated! Run the setup command on your Windows computer.");
+      const list = await api.getEnrolledSensors().catch(() => []);
+      if (list) setEnrolledSensors(list);
+    } catch (err: any) {
+      setActionError(err.message || 'Failed to generate enrollment token.');
+    } finally {
+      setIsGeneratingToken(false);
+    }
+  };
+
+  const handleCopyToken = () => {
+    if (tokenEnrollResult?.enrollment_token) {
+      navigator.clipboard.writeText(tokenEnrollResult.enrollment_token);
+      setCopiedToken(true);
+      setTimeout(() => setCopiedToken(false), 2000);
+    }
+  };
+
+  const handleCopyTokenCmd = () => {
+    if (tokenEnrollResult?.setup_command) {
+      navigator.clipboard.writeText(tokenEnrollResult.setup_command);
+      setCopiedTokenCmd(true);
+      setTimeout(() => setCopiedTokenCmd(false), 2000);
+    }
+  };
+
   const handleEnrollSensor = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newSensorId.trim() || !newSensorName.trim()) return;
@@ -396,8 +454,6 @@ export const LiveMonitorPage: React.FC<LiveMonitorPageProps> = ({
   };
 
   const isWindows = typeof navigator !== 'undefined' && /Win/i.test(navigator.userAgent);
-  const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent);
-  const isLinux = typeof navigator !== 'undefined' && /Linux/i.test(navigator.userAgent);
 
   const handleDownloadPackage = async (sensorId?: string, apiKey?: string) => {
     try {
@@ -680,11 +736,15 @@ export const LiveMonitorPage: React.FC<LiveMonitorPageProps> = ({
 
         <div className="flex items-center gap-3 shrink-0 flex-wrap">
           <button
-            onClick={() => setShowEnrollModal(true)}
+            onClick={() => {
+              setTokenEnrollResult(null);
+              setEnrollResult(null);
+              setShowEnrollModal(true);
+            }}
             className="px-3 py-1.5 rounded-xl bg-[#7B2CBF]/20 hover:bg-[#7B2CBF]/30 border border-[#7B2CBF]/50 text-[#D8BBFF] text-xs font-mono font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
           >
             <Plus className="w-3.5 h-3.5" />
-            <span>Enroll My Computer</span>
+            <span>Add New Sensor</span>
           </button>
           {getStatusBadge()}
         </div>
@@ -840,70 +900,261 @@ export const LiveMonitorPage: React.FC<LiveMonitorPageProps> = ({
       {/* Enrollment Modal */}
       {showEnrollModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-[#0D0D36] border border-[#242452] p-6 shadow-2xl space-y-4">
+          <div className="w-full max-w-lg rounded-2xl bg-[#0D0D36] border border-[#242452] p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-[#242452] pb-3">
               <h3 className="text-base font-heading font-bold text-[#F5F5F7] flex items-center gap-2">
                 <Laptop className="w-5 h-5 text-[#39D7FF]" />
-                <span>Enroll Local Computer / Sensor</span>
+                <span>Add New Sensor Device</span>
               </h3>
               <button
                 onClick={() => {
                   setShowEnrollModal(false);
+                  setTokenEnrollResult(null);
                   setEnrollResult(null);
                 }}
-                className="text-[#A5A5BE] hover:text-[#F5F5F7] text-sm"
+                className="text-[#A5A5BE] hover:text-[#F5F5F7] text-sm cursor-pointer"
               >
                 ✕
               </button>
             </div>
 
-            {!enrollResult ? (
-              <form onSubmit={handleEnrollSensor} className="space-y-4 text-xs font-mono">
-                <p className="text-[#A5A5BE]">
-                  Generate a revocable, cryptographically secure API key for your computer's local sensor.
-                  Telemetry transmitted by this sensor will be strictly isolated and attributed to your account ({user?.email}).
-                </p>
+            {/* If Token Generated Successfully */}
+            {tokenEnrollResult ? (
+              <div className="space-y-4 text-xs font-mono">
+                <div className="p-3 rounded-xl bg-[#7DDB52]/10 border border-[#7DDB52]/30 text-[#7DDB52] flex items-center gap-2">
+                  <CheckCircle2 className="w-5 h-5 shrink-0" />
+                  <span>One-time enrollment token generated! Token is single-use and expires in 30 minutes.</span>
+                </div>
 
-                <div>
-                  <label className="text-[11px] text-[#A5A5BE] block mb-1">Sensor Identifier (Slug)</label>
-                  <input
-                    type="text"
-                    value={newSensorId}
-                    onChange={(e) => setNewSensorId(e.target.value)}
-                    placeholder="e.g. sensor-my-laptop-01"
-                    className="w-full px-3 py-2 rounded-xl bg-[#07072B] border border-[#242452] text-[#F5F5F7] focus:border-[#39D7FF] outline-none"
-                    required
-                  />
+                <div className="grid grid-cols-2 gap-3 text-[11px]">
+                  <div className="p-2.5 rounded-xl bg-[#07072B] border border-[#242452]">
+                    <span className="text-[#A5A5BE] block mb-0.5">Sensor ID</span>
+                    <span className="text-[#F5F5F7] font-bold truncate block">{tokenEnrollResult.sensor_id}</span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-[#07072B] border border-[#242452]">
+                    <span className="text-[#A5A5BE] block mb-0.5">Device Name</span>
+                    <span className="text-[#39D7FF] font-bold truncate block">{tokenEnrollResult.name}</span>
+                  </div>
                 </div>
 
                 <div>
-                  <label className="text-[11px] text-[#A5A5BE] block mb-1">Device Label / Computer Name</label>
-                  <input
-                    type="text"
-                    value={newSensorName}
-                    onChange={(e) => setNewSensorName(e.target.value)}
-                    placeholder="e.g. My Workstation (Windows 11)"
-                    className="w-full px-3 py-2 rounded-xl bg-[#07072B] border border-[#242452] text-[#F5F5F7] focus:border-[#39D7FF] outline-none"
-                    required
-                  />
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[11px] text-[#A5A5BE]">One-Time Enrollment Token</label>
+                    <span className="text-[10px] text-[#FFB800] font-semibold">Single-Use Only</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={tokenEnrollResult.enrollment_token}
+                      className="w-full p-2.5 rounded-xl bg-[#07072B] border border-[#39D7FF]/50 text-[#A8F500] font-mono select-all outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleCopyToken}
+                      className="px-3 py-2.5 rounded-xl bg-[#39D7FF]/20 hover:bg-[#39D7FF]/30 border border-[#39D7FF]/50 text-[#39D7FF] flex items-center gap-1 shrink-0 cursor-pointer"
+                    >
+                      {copiedToken ? <Check className="w-4 h-4 text-[#7DDB52]" /> : <Copy className="w-4 h-4" />}
+                      <span>{copiedToken ? 'Copied' : 'Copy'}</span>
+                    </button>
+                  </div>
                 </div>
 
-                <div className="flex justify-end gap-3 pt-2">
+                {/* 1-Step Automatic Setup Command */}
+                <div className="p-3.5 rounded-xl bg-[#10103D] border border-[#39D7FF]/30 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[#39D7FF] font-bold text-xs flex items-center gap-1.5">
+                      <Terminal className="w-4 h-4" />
+                      <span>Automatic Setup Command</span>
+                    </span>
+                    <span className="text-[10px] text-[#7DDB52] bg-[#7DDB52]/10 border border-[#7DDB52]/30 px-2 py-0.5 rounded-full font-bold">
+                      Zero Configuration
+                    </span>
+                  </div>
+                  <p className="text-[#A5A5BE] text-[11px] font-sans">
+                    Run this command on your Windows device in PowerShell or Command Prompt. It automatically redeems your token, receives permanent credentials, and creates <code>sensor_config.json</code>:
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <code className="w-full p-2.5 rounded-xl bg-[#07072B] border border-[#242452] text-[11px] text-[#39D7FF] font-mono select-all overflow-x-auto">
+                      {tokenEnrollResult.setup_command}
+                    </code>
+                    <button
+                      type="button"
+                      onClick={handleCopyTokenCmd}
+                      className="px-3 py-2.5 rounded-xl bg-[#39D7FF]/20 hover:bg-[#39D7FF]/30 border border-[#39D7FF]/50 text-[#39D7FF] flex items-center gap-1 shrink-0 cursor-pointer"
+                    >
+                      {copiedTokenCmd ? <Check className="w-4 h-4 text-[#7DDB52]" /> : <Copy className="w-4 h-4" />}
+                      <span>{copiedTokenCmd ? 'Copied' : 'Copy'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-xl bg-[#07072B] border border-[#242452] text-[11px] text-[#A5A5BE] space-y-1.5">
+                  <span className="text-[#F5F5F7] font-semibold block">Next Step:</span>
+                  <p className="font-sans text-[11px]">
+                    Once enrollment finishes, launch live monitoring on the Windows computer by running <code>Start_ThreatTrack.bat</code>. The sensor will immediately report Online in Live Monitor!
+                  </p>
+                </div>
+
+                <div className="flex justify-end pt-2">
                   <button
                     type="button"
-                    onClick={() => setShowEnrollModal(false)}
-                    className="px-4 py-2 rounded-xl bg-[#10103D] hover:bg-[#15154A] border border-[#242452] text-[#A5A5BE]"
+                    onClick={() => {
+                      setShowEnrollModal(false);
+                      setTokenEnrollResult(null);
+                    }}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#39D7FF] to-[#00A3FF] text-[#05051F] font-bold cursor-pointer"
                   >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#39D7FF] to-[#00A3FF] text-[#05051F] font-bold"
-                  >
-                    Generate Sensor Credential
+                    Done
                   </button>
                 </div>
-              </form>
+              </div>
+            ) : !enrollResult ? (
+              <div className="space-y-4">
+                {/* Tab switcher */}
+                <div className="flex rounded-xl bg-[#07072B] p-1 border border-[#242452] text-xs font-mono">
+                  <button
+                    type="button"
+                    onClick={() => setEnrollTab('token')}
+                    className={`flex-1 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
+                      enrollTab === 'token'
+                        ? 'bg-[#39D7FF]/20 text-[#39D7FF] border border-[#39D7FF]/40'
+                        : 'text-[#A5A5BE] hover:text-[#F5F5F7]'
+                    }`}
+                  >
+                    Automatic Token Setup
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEnrollTab('legacy')}
+                    className={`flex-1 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
+                      enrollTab === 'legacy'
+                        ? 'bg-[#39D7FF]/20 text-[#39D7FF] border border-[#39D7FF]/40'
+                        : 'text-[#A5A5BE] hover:text-[#F5F5F7]'
+                    }`}
+                  >
+                    Manual / Package Setup
+                  </button>
+                </div>
+
+                {enrollTab === 'token' ? (
+                  <form onSubmit={handleCreateEnrollmentToken} className="space-y-3.5 text-xs font-mono">
+                    <p className="text-[#A5A5BE] text-[11px] font-sans leading-relaxed">
+                      Generate a secure, one-time enrollment token to connect a new Windows device. The target computer will automatically receive its credentials over HTTPS and create its local configuration.
+                    </p>
+
+                    <div>
+                      <label className="text-[11px] text-[#A5A5BE] block mb-1">Sensor Name <span className="text-[#FF4D5A]">*</span></label>
+                      <input
+                        type="text"
+                        value={newSensorName}
+                        onChange={(e) => setNewSensorName(e.target.value)}
+                        placeholder="e.g. SOC Primary Workstation"
+                        className="w-full px-3 py-2 rounded-xl bg-[#07072B] border border-[#242452] text-[#F5F5F7] focus:border-[#39D7FF] outline-none"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] text-[#A5A5BE] block mb-1">Description (Optional)</label>
+                      <input
+                        type="text"
+                        value={newSensorDescription}
+                        onChange={(e) => setNewSensorDescription(e.target.value)}
+                        placeholder="e.g. Network boundary ingress monitor"
+                        className="w-full px-3 py-2 rounded-xl bg-[#07072B] border border-[#242452] text-[#F5F5F7] focus:border-[#39D7FF] outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] text-[#A5A5BE] block mb-1">Device / Environment Label (Optional)</label>
+                      <input
+                        type="text"
+                        value={newSensorDeviceLabel}
+                        onChange={(e) => setNewSensorDeviceLabel(e.target.value)}
+                        placeholder="e.g. Windows 11 Laptop / Production Edge"
+                        className="w-full px-3 py-2 rounded-xl bg-[#07072B] border border-[#242452] text-[#F5F5F7] focus:border-[#39D7FF] outline-none"
+                      />
+                    </div>
+
+                    <details className="text-[11px] text-[#A5A5BE] cursor-pointer pt-1">
+                      <summary className="hover:text-[#39D7FF]">Advanced: Custom Sensor ID Slug</summary>
+                      <div className="pt-2">
+                        <input
+                          type="text"
+                          value={newSensorId}
+                          onChange={(e) => setNewSensorId(e.target.value)}
+                          placeholder="e.g. sensor-lab-01 (leave blank to auto-generate)"
+                          className="w-full px-3 py-2 rounded-xl bg-[#07072B] border border-[#242452] text-[#F5F5F7] focus:border-[#39D7FF] outline-none"
+                        />
+                      </div>
+                    </details>
+
+                    <div className="flex justify-end gap-3 pt-3">
+                      <button
+                        type="button"
+                        onClick={() => setShowEnrollModal(false)}
+                        className="px-4 py-2 rounded-xl bg-[#10103D] hover:bg-[#15154A] border border-[#242452] text-[#A5A5BE] cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isGeneratingToken}
+                        className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#39D7FF] to-[#00A3FF] text-[#05051F] font-bold disabled:opacity-50 cursor-pointer"
+                      >
+                        {isGeneratingToken ? 'Generating Token...' : 'Generate Enrollment Token'}
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <form onSubmit={handleEnrollSensor} className="space-y-4 text-xs font-mono">
+                    <p className="text-[#A5A5BE]">
+                      Generate a direct API key for manual configuration or download a pre-configured zip bundle.
+                    </p>
+
+                    <div>
+                      <label className="text-[11px] text-[#A5A5BE] block mb-1">Sensor Identifier (Slug)</label>
+                      <input
+                        type="text"
+                        value={newSensorId}
+                        onChange={(e) => setNewSensorId(e.target.value)}
+                        placeholder="e.g. sensor-my-laptop-01"
+                        className="w-full px-3 py-2 rounded-xl bg-[#07072B] border border-[#242452] text-[#F5F5F7] focus:border-[#39D7FF] outline-none"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] text-[#A5A5BE] block mb-1">Device Label / Computer Name</label>
+                      <input
+                        type="text"
+                        value={newSensorName}
+                        onChange={(e) => setNewSensorName(e.target.value)}
+                        placeholder="e.g. My Workstation (Windows 11)"
+                        className="w-full px-3 py-2 rounded-xl bg-[#07072B] border border-[#242452] text-[#F5F5F7] focus:border-[#39D7FF] outline-none"
+                        required
+                      />
+                    </div>
+
+                    <div className="flex justify-end gap-3 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowEnrollModal(false)}
+                        className="px-4 py-2 rounded-xl bg-[#10103D] hover:bg-[#15154A] border border-[#242452] text-[#A5A5BE] cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#39D7FF] to-[#00A3FF] text-[#05051F] font-bold cursor-pointer"
+                      >
+                        Generate Sensor Credential
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </div>
             ) : (
               <div className="space-y-4 text-xs font-mono">
                 <div className="p-3 rounded-xl bg-[#7DDB52]/10 border border-[#7DDB52]/30 text-[#7DDB52] flex items-center gap-2">
@@ -938,19 +1189,6 @@ export const LiveMonitorPage: React.FC<LiveMonitorPageProps> = ({
                   </div>
                 </div>
 
-                {/* Operating System Compatibility Notice */}
-                {!isWindows && (
-                  <div className="p-3 rounded-xl bg-[#FFB800]/10 border border-[#FFB800]/30 text-xs font-mono text-[#FFB800] space-y-1">
-                    <div className="font-bold flex items-center gap-1.5">
-                      <AlertTriangle className="w-4 h-4 text-[#FFB800] shrink-0" />
-                      <span>{isMac ? 'macOS' : isLinux ? 'Linux' : 'Non-Windows'} Client Detected</span>
-                    </div>
-                    <p className="text-[#A5A5BE] font-sans text-[11px] leading-relaxed">
-                      ThreatTrack Local Packet Capture Agent currently supports Windows 10 and 11 with the Npcap driver. Native client-side sniffing on macOS and Linux is in active development. You can monitor Windows workstations from this account, or inspect recorded flows.
-                    </p>
-                  </div>
-                )}
-
                 {/* 1-Click Zero-Command Windows Package Download */}
                 <div className="p-3.5 rounded-xl bg-[#10103D] border border-[#39D7FF]/30 space-y-2.5">
                   <div className="flex items-center justify-between">
@@ -976,37 +1214,6 @@ export const LiveMonitorPage: React.FC<LiveMonitorPageProps> = ({
                   </button>
                 </div>
 
-                {/* 3-Step Setup Instructions */}
-                <div className="p-3 rounded-xl bg-[#07072B] border border-[#242452] text-[11px] text-[#A5A5BE] space-y-2">
-                  <span className="text-[#F5F5F7] font-semibold block">Quick 3-Step Setup:</span>
-                  <ol className="list-decimal list-inside space-y-1 font-sans text-[11px]">
-                    <li>Ensure <a href="https://npcap.com/#download" target="_blank" rel="noreferrer" className="text-[#39D7FF] underline">Npcap</a> is installed with WinPcap API-compatible mode enabled.</li>
-                    <li>Extract the downloaded <code>ThreatTrack-Sensor.zip</code> to any folder.</li>
-                    <li>Double-click <code>start_sensor.bat</code> and accept the Windows UAC elevation prompt.</li>
-                  </ol>
-                </div>
-
-                {/* Manual Terminal Commands (For Developers) */}
-                <details className="text-[11px] text-[#A5A5BE] space-y-2 cursor-pointer">
-                  <summary className="text-[#39D7FF] hover:underline font-semibold">
-                    Show advanced terminal launch commands
-                  </summary>
-                  <div className="space-y-2 pt-2">
-                    <div className="space-y-1">
-                      <span className="text-[10px] text-[#A5A5BE] block">Standard Runner:</span>
-                      <code className="block p-1.5 rounded bg-[#10103D] text-[10px] text-[#F5F5F7] overflow-x-auto">
-                        python scripts/run_sensor.py --interface "{selectedInterface || 'Wi-Fi 3'}" --backend-url "{window.location.origin}" --api-key "{enrollResult.api_key}" --sensor-id "{enrollResult.sensor.sensor_id}"
-                      </code>
-                    </div>
-                    <div className="space-y-1">
-                      <span className="text-[10px] text-[#A5A5BE] block">Approved Elevated Windows Launcher (Least Privileges):</span>
-                      <code className="block p-1.5 rounded bg-[#10103D] text-[10px] text-[#A8F500] overflow-x-auto">
-                        powershell -ExecutionPolicy Bypass -File scripts/launch_sensor_elevated.ps1 -Interface "{selectedInterface || 'Wi-Fi 3'}" -BackendUrl "{window.location.origin}" -ApiKey "{enrollResult.api_key}" -SensorId "{enrollResult.sensor.sensor_id}"
-                      </code>
-                    </div>
-                  </div>
-                </details>
-
                 <div className="flex justify-end pt-2">
                   <button
                     type="button"
@@ -1014,7 +1221,7 @@ export const LiveMonitorPage: React.FC<LiveMonitorPageProps> = ({
                       setShowEnrollModal(false);
                       setEnrollResult(null);
                     }}
-                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#39D7FF] to-[#00A3FF] text-[#05051F] font-bold"
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#39D7FF] to-[#00A3FF] text-[#05051F] font-bold cursor-pointer"
                   >
                     Done
                   </button>
@@ -1064,11 +1271,11 @@ export const LiveMonitorPage: React.FC<LiveMonitorPageProps> = ({
                   className="w-full bg-[#07072B] border border-[#242452] rounded-xl px-3 py-2 text-xs font-mono text-[#F5F5F7] focus:outline-none focus:border-[#39D7FF] disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   {enrolledSensors.length === 0 ? (
-                    <option value="">No enrolled sensors (Click Enroll My Computer)</option>
+                    <option value="">No enrolled sensors (Click Add New Sensor)</option>
                   ) : (
                     enrolledSensors.map((s) => (
                       <option key={s.sensor_id} value={s.sensor_id}>
-                        {s.name} ({s.sensor_id}) • {s.status === 'ACTIVE' ? (s.last_seen_at && (Date.now() - new Date(s.last_seen_at).getTime() < 90000) ? 'Online' : 'Standby') : 'Revoked'}
+                        {s.name} ({s.sensor_id}){s.device_label ? ` [${s.device_label}]` : ''} • {s.status === 'ACTIVE' ? (s.last_seen_at && (Date.now() - new Date(s.last_seen_at).getTime() < 90000) ? 'Online' : 'Standby') : 'Revoked'}
                       </option>
                     ))
                   )}

@@ -43,7 +43,7 @@ from src.api.routes_dashboard import router as dashboard_router
 from src.api.routes_capture import router as capture_router
 from src.api.routes_auth import router as auth_router
 from src.api.routes_reports import router as reports_router
-from src.api.routes_sensor import router as sensor_router
+from src.api.routes_sensor import router as sensor_router, sensors_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -176,6 +176,7 @@ app.include_router(models_router)
 app.include_router(dashboard_router)
 app.include_router(capture_router)
 app.include_router(sensor_router)
+app.include_router(sensors_router)
 
 
 # Global Exception Handlers

@@ -47,7 +47,7 @@ if (-not $isAdmin) {
     Write-Host "[*] Windows Npcap packet capture requires elevated privileges to access raw sockets." -ForegroundColor Yellow
     Write-Host "[*] Requesting UAC elevation for ThreatTrack Local Sensor..." -ForegroundColor Cyan
 
-    $argList = "-NoExit -ExecutionPolicy Bypass -File `"$($MyInvocation.MyCommand.Path)`""
+    $argList = "-NoExit -File `"$($MyInvocation.MyCommand.Path)`""
     if ($Interface) { $argList += " -Interface `"$Interface`"" }
     if ($BackendUrl) { $argList += " -BackendUrl `"$BackendUrl`"" }
     if ($ApiKey) { $argList += " -ApiKey `"$ApiKey`"" }
@@ -85,5 +85,18 @@ if ($SensorId) {
     $pythonArgs += @("--sensor-id", "$SensorId")
 }
 
-Write-Host "[*] Launching: $pythonExe $($pythonArgs -join ' ')" -ForegroundColor Cyan
+$displayArgs = @()
+$maskNext = $false
+foreach ($item in $pythonArgs) {
+    if ($maskNext) {
+        $displayArgs += "(redacted)"
+        $maskNext = $false
+    } elseif ($item -eq "--api-key") {
+        $displayArgs += $item
+        $maskNext = $true
+    } else {
+        $displayArgs += $item
+    }
+}
+Write-Host "[*] Launching: $pythonExe $($displayArgs -join ' ')" -ForegroundColor Cyan
 & $pythonExe $pythonArgs

@@ -21,7 +21,7 @@ backend_dir = Path(__file__).resolve().parent.parent.parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
-from src.sensor.config import SensorConfig
+from src.sensor.config import SensorConfig, validate_telemetry_backend_url, mask_api_key
 from src.sensor.interface_manager import InterfaceManager
 from src.sensor.windows_sensor import WindowsSensor
 
@@ -118,6 +118,20 @@ def cmd_inspect_queue(sensor: WindowsSensor):
 
 
 def main():
+    # Load environment variables from .env file if available
+    try:
+        from dotenv import load_dotenv
+        for env_cand in [
+            Path(".env"),
+            Path(__file__).resolve().parent.parent.parent / ".env",
+            Path(__file__).resolve().parent.parent.parent.parent / ".env"
+        ]:
+            if env_cand.exists():
+                load_dotenv(dotenv_path=env_cand)
+                break
+    except ImportError:
+        pass
+
     parser = argparse.ArgumentParser(
         description="ThreatTrack Local Windows Passive Sensor - Live Network Threat Telemetry (SIH PS 26145)"
     )
@@ -129,7 +143,7 @@ def main():
     parser.add_argument(
         "--interface", "-i",
         type=str,
-        default=None,
+        default=os.getenv("THREATTRACK_INTERFACE", os.getenv("NETRA_INTERFACE", None)),
         help="Target network interface name to monitor (e.g., 'Wi-Fi 2', 'Wi-Fi 3'). If omitted, auto-selects active adapter."
     )
     parser.add_argument(
@@ -187,7 +201,11 @@ def main():
     args = parser.parse_args()
 
     # Automatically inspect sensor_config.json in current directory or project root
-    for candidate in [Path("sensor_config.json"), Path(__file__).resolve().parent.parent.parent / "sensor_config.json"]:
+    for candidate in [
+        Path("sensor_config.json"),
+        Path(__file__).resolve().parent.parent.parent / "sensor_config.json",
+        Path(__file__).resolve().parent.parent.parent.parent / "sensor_config.json"
+    ]:
         if candidate.exists():
             try:
                 with open(candidate, "r", encoding="utf-8") as f:
@@ -210,6 +228,14 @@ def main():
         return
 
     enable_transmission = bool(args.backend_url and args.api_key)
+
+    if enable_transmission:
+        try:
+            args.backend_url = validate_telemetry_backend_url(args.backend_url, enable_remote=True)
+        except ValueError as url_err:
+            print(f"\n[SECURITY ERROR] Insecure remote telemetry URL rejected: {url_err}")
+            sys.exit(1)
+        print(f"[*] Cloud telemetry enabled: {args.backend_url} (Key: {mask_api_key(args.api_key)})")
 
     config_kwargs = {}
     if args.sensor_id:
@@ -249,25 +275,31 @@ def main():
 
     signal.signal(signal.SIGINT, handle_signal)
 
-    # Start sensor
-    print(f"[*] Starting sensor on interface: {args.interface or 'Auto-Select'}...")
+    # Start sensor capture (or enter STANDBY if waiting for dashboard command)
+    print(f"[*] Initializing sensor adapter: {args.interface or 'Auto-Select'}...")
     res = sensor.start(args.interface)
     if not res.get("success"):
         err_msg = res.get('message', 'Unknown error')
-        print(f"\n[ERROR] Failed to start sensor: {err_msg}")
-        if "permission" in err_msg.lower() or "admin" in err_msg.lower() or "winerror 5" in err_msg.lower():
-            print("\n[REMEDIATION] Windows Npcap requires elevated privileges to capture raw network frames.")
-            print("  Option 1: Run your terminal as Administrator, then re-execute this command.")
-            print("  Option 2: Run the elevated launcher: powershell -ExecutionPolicy Bypass -File scripts/launch_sensor_elevated.ps1")
-        sys.exit(1)
+        if enable_transmission:
+            print(f"[*] Local capture not started yet ({err_msg}).")
+            print("[*] Cloud telemetry transmitter is ACTIVE in STANDBY mode.")
+            print("[*] You can control packet capture directly from your ThreatTrack web dashboard.")
+        else:
+            print(f"\n[ERROR] Failed to start sensor: {err_msg}")
+            if "permission" in err_msg.lower() or "admin" in err_msg.lower() or "winerror 5" in err_msg.lower():
+                print("\n[REMEDIATION] Windows Npcap requires elevated privileges to capture raw network frames.")
+                print("  Option 1: Run your terminal as Administrator, then re-execute this command.")
+                print("  Option 2: Run 'start_sensor.bat' which automatically prompts for standard Administrator elevation.")
+            sys.exit(1)
+    else:
+        print(f"[+] Passive capture active on: {sensor.actual_interface}")
 
-    print(f"[+] Passive capture active on: {sensor.actual_interface}")
     print(f"[*] Telemetry staging into local queue: {config.queue_spool_dir}")
-    print("[*] Press Ctrl+C to halt capture gracefully.\n")
+    print("[*] Press Ctrl+C to halt agent gracefully.\n")
 
     start_t = time.time()
     try:
-        while not stop_event and sensor.status == "RUNNING":
+        while not stop_event:
             elapsed = time.time() - start_t
             if args.duration and elapsed >= args.duration:
                 print(f"\n[*] Configured capture duration ({args.duration}s) reached.")
@@ -275,21 +307,26 @@ def main():
 
             time.sleep(2.0)
             status = sensor.get_status()
-            sys.stdout.write(
-                f"\r[Uptime: {status['uptime_seconds']:>5.1f}s] "
-                f"Packets: {status['packets_captured']:>5} "
-                f"({status['current_pps']:>5.1f} pps) | "
-                f"Flows: {status['flows_completed']:>4} | "
-                f"Threats: {status['threats_detected']:>3} | "
-                f"Queued: {status['queue_pending']:>4}  "
-            )
+            tx = status.get("transmitter") or {}
+            conn_tag = "ONLINE" if tx.get("is_connected") else ("AUTH_FAIL" if tx.get("auth_failed") else "CONNECTING")
+            if status["status"] == "RUNNING":
+                sys.stdout.write(
+                    f"\r[{conn_tag} | ACTIVE: {status['interface']}] "
+                    f"Packets: {status['packets_captured']:>5} ({status['current_pps']:>4.1f} pps) | "
+                    f"Flows: {status['flows_completed']:>4} | "
+                    f"Threats: {status['threats_detected']:>2} | "
+                    f"Acked: {tx.get('records_acked', 0):>4}  "
+                )
+            else:
+                sys.stdout.write(
+                    f"\r[{conn_tag} | STANDBY] Agent connected to cloud. Awaiting web dashboard START command...  "
+                )
             sys.stdout.flush()
 
     except KeyboardInterrupt:
         pass
     finally:
-        if sensor.status in ("RUNNING", "STARTING"):
-            sensor.stop()
+        sensor.shutdown()
 
     print("\n" + "=" * 60)
     print("THREATTRACK SENSOR RUN COMPLETE")

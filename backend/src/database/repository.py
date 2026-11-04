@@ -10,6 +10,7 @@ import time
 import logging
 import copy
 import threading
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
@@ -21,6 +22,7 @@ from src.database.models import (
     UserModel,
     UserSessionModel,
     SensorEnrollmentModel,
+    SensorEnrollmentTokenModel,
     SensorIngestRecordModel,
 )
 
@@ -557,7 +559,9 @@ class SensorEnrollmentRepository:
         api_key_hash: str,
         api_key_prefix: str,
         owner_email: str,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        description: Optional[str] = None,
+        device_label: Optional[str] = None
     ) -> SensorEnrollmentModel:
         """Enroll a new sensor device with its credential hash and owner association."""
         existing = db.query(SensorEnrollmentModel).filter(SensorEnrollmentModel.sensor_id == sensor_id).first()
@@ -568,6 +572,10 @@ class SensorEnrollmentRepository:
             existing.owner_email = owner_email
             if user_id:
                 existing.user_id = user_id
+            if description is not None:
+                existing.description = description
+            if device_label is not None:
+                existing.device_label = device_label
             existing.status = "ACTIVE"
             existing.revoked_at = None
             db.commit()
@@ -577,6 +585,8 @@ class SensorEnrollmentRepository:
         sensor = SensorEnrollmentModel(
             sensor_id=sensor_id,
             name=name,
+            description=description,
+            device_label=device_label,
             api_key_hash=api_key_hash,
             api_key_prefix=api_key_prefix,
             owner_email=owner_email,
@@ -653,6 +663,84 @@ class SensorEnrollmentRepository:
         db.commit()
         db.refresh(sensor)
         return sensor
+
+
+class SensorEnrollmentTokenRepository:
+    """Repository for managing single-use sensor enrollment tokens."""
+
+    @staticmethod
+    def create_token(
+        db: Session,
+        token_hash: str,
+        sensor_id: str,
+        name: str,
+        owner_email: str,
+        user_id: str,
+        expires_at: datetime,
+        description: Optional[str] = None,
+        device_label: Optional[str] = None
+    ) -> SensorEnrollmentTokenModel:
+        """Create a new one-time enrollment token record."""
+        token_record = SensorEnrollmentTokenModel(
+            token_hash=token_hash,
+            sensor_id=sensor_id,
+            name=name,
+            description=description,
+            device_label=device_label,
+            owner_email=owner_email,
+            user_id=user_id,
+            expires_at=expires_at,
+            is_used=False
+        )
+        db.add(token_record)
+        db.commit()
+        db.refresh(token_record)
+        return token_record
+
+    @staticmethod
+    def get_by_token_hash(db: Session, token_hash: str) -> Optional[SensorEnrollmentTokenModel]:
+        """Lookup token by SHA-256 hash."""
+        return db.query(SensorEnrollmentTokenModel).filter(
+            SensorEnrollmentTokenModel.token_hash == token_hash
+        ).first()
+
+    @staticmethod
+    def redeem_token(
+        db: Session,
+        token_hash: str,
+        redeemed_ip: Optional[str] = None
+    ) -> Optional[SensorEnrollmentTokenModel]:
+        """
+        Validate and atomically redeem an enrollment token within a transaction.
+        Returns the token record if valid and successfully redeemed, or None.
+        Enforces single-use and expiration checks.
+        """
+        now = datetime.now(timezone.utc)
+        query = db.query(SensorEnrollmentTokenModel).filter(
+            SensorEnrollmentTokenModel.token_hash == token_hash,
+            SensorEnrollmentTokenModel.is_used == False,  # noqa: E712
+            SensorEnrollmentTokenModel.expires_at > now
+        )
+        if db.bind and hasattr(db.bind, "dialect") and db.bind.dialect.name == "postgresql":
+            query = query.with_for_update()
+
+        token_record = query.first()
+        if not token_record:
+            return None
+
+        token_record.is_used = True
+        token_record.redeemed_at = now
+        token_record.redeemed_ip = redeemed_ip
+        db.commit()
+        db.refresh(token_record)
+        return token_record
+
+    @staticmethod
+    def get_by_user(db: Session, user_id: str) -> List[SensorEnrollmentTokenModel]:
+        """Retrieve recent tokens created by a user."""
+        return db.query(SensorEnrollmentTokenModel).filter(
+            SensorEnrollmentTokenModel.user_id == user_id
+        ).order_by(SensorEnrollmentTokenModel.created_at.desc()).all()
 
 
 class SensorIngestRepository:

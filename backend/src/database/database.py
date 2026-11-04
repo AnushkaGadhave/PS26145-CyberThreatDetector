@@ -193,6 +193,7 @@ def init_db():
             UserModel,
             UserSessionModel,
             SensorEnrollmentModel,
+            SensorEnrollmentTokenModel,
             SensorIngestRecordModel,
         )
         Base.metadata.create_all(bind=engine)

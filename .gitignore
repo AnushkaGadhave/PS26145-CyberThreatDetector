@@ -59,6 +59,14 @@ frontend/*.env
 !frontend/.env.example
 !**/.env.example
 
+# Sensor Configuration & Credentials (NEVER COMMIT)
+sensor_config.json
+**/sensor_config.json
+sensor_config.local.json
+**/sensor_config.local.json
+!sensor_config.example.json
+!**/sensor_config.example.json
+
 # Datasets, network captures and runtime sensor spools (Local Only)
 data/raw/
 data/processed/
