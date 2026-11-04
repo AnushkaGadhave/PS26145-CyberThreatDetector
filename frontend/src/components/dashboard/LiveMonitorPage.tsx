@@ -73,6 +73,7 @@ export const LiveMonitorPage: React.FC<LiveMonitorPageProps> = ({
 
   const eventsTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const sensorTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const transitionTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isPollingEventsRef = useRef<boolean>(false);
   const isPollingSensorsRef = useRef<boolean>(false);
   const backendConnectionLostRef = useRef<boolean>(false);
@@ -157,16 +158,18 @@ export const LiveMonitorPage: React.FC<LiveMonitorPageProps> = ({
       isPollingEventsRef.current = true;
 
       try {
-        const [statusData, localEvents, remoteEvents] = await Promise.all([
+        const [statusData, localEvents, remoteEvents, sensorList] = await Promise.all([
           api.getCaptureStatus(),
           api.getRecentLiveEvents(30).catch(() => []),
-          api.getRemoteSensorEvents(undefined, 30).catch(() => [])
+          api.getRemoteSensorEvents(undefined, 30).catch(() => []),
+          api.getEnrolledSensors().catch(() => null)
         ]);
 
         if (isPolling) {
           setBackendConnectionLost(false);
           backendConnectionLostRef.current = false;
           if (statusData) setCaptureStatus(statusData);
+          if (sensorList) setEnrolledSensors(sensorList);
 
           const taggedLocal = (localEvents || []).map(e => ({
             ...e,
@@ -238,9 +241,45 @@ export const LiveMonitorPage: React.FC<LiveMonitorPageProps> = ({
       isPolling = false;
       if (eventsTimerRef.current) clearInterval(eventsTimerRef.current);
       if (sensorTimerRef.current) clearInterval(sensorTimerRef.current);
+      if (transitionTimerRef.current) clearInterval(transitionTimerRef.current);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, []);
+
+  const startTransitionPolling = (targetState: 'RUNNING' | 'STOPPED', maxAttempts: number = 8) => {
+    if (transitionTimerRef.current) {
+      clearInterval(transitionTimerRef.current);
+      transitionTimerRef.current = null;
+    }
+
+    let attempts = 0;
+    transitionTimerRef.current = setInterval(async () => {
+      attempts++;
+      try {
+        const list = await api.getEnrolledSensors();
+        if (list) {
+          setEnrolledSensors(list);
+          const current = selectedRemoteSensorId
+            ? list.find(s => s.sensor_id === selectedRemoteSensorId)
+            : list[0];
+          if (current && current.actual_state === targetState) {
+            if (transitionTimerRef.current) {
+              clearInterval(transitionTimerRef.current);
+              transitionTimerRef.current = null;
+            }
+          }
+        }
+      } catch {
+        // ignore errors during fast transition polling
+      }
+      if (attempts >= maxAttempts) {
+        if (transitionTimerRef.current) {
+          clearInterval(transitionTimerRef.current);
+          transitionTimerRef.current = null;
+        }
+      }
+    }, 1200);
+  };
 
   const handleStart = async () => {
     setIsStarting(true);
@@ -267,6 +306,7 @@ export const LiveMonitorPage: React.FC<LiveMonitorPageProps> = ({
           const list = await api.getEnrolledSensors();
           setEnrolledSensors(list);
           if (onRefreshParent) onRefreshParent();
+          startTransitionPolling('RUNNING');
         }
       }
     } catch (err: any) {
@@ -298,6 +338,7 @@ export const LiveMonitorPage: React.FC<LiveMonitorPageProps> = ({
           const list = await api.getEnrolledSensors();
           setEnrolledSensors(list);
           if (onRefreshParent) onRefreshParent();
+          startTransitionPolling('STOPPED');
         }
       }
     } catch (err: any) {
@@ -442,6 +483,12 @@ export const LiveMonitorPage: React.FC<LiveMonitorPageProps> = ({
     activeRemoteSensor?.actual_state !== 'RUNNING'
   );
 
+  const isRemoteStopPending = Boolean(
+    isRemoteOnline &&
+    activeRemoteSensor?.target_state === 'STOPPED' &&
+    activeRemoteSensor?.actual_state === 'RUNNING'
+  );
+
   const isRemoteError = Boolean(
     activeRemoteSensor &&
     (activeRemoteSensor.actual_state === 'ERROR' || activeRemoteSensor.actual_state === 'PERMISSION_REQUIRED')
@@ -468,6 +515,14 @@ export const LiveMonitorPage: React.FC<LiveMonitorPageProps> = ({
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#FF4D5A]/15 border border-[#FF4D5A]/40 text-[#FF4D5A] font-mono text-xs font-bold">
             <ShieldAlert className="w-3.5 h-3.5" />
             <span>PERMISSION / DRIVER ERROR</span>
+          </div>
+        );
+      }
+      if (isRemoteStopPending) {
+        return (
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#FFB800]/15 border border-[#FFB800]/40 text-[#FFB800] font-mono text-xs font-bold animate-pulse">
+            <span className="w-2.5 h-2.5 rounded-full bg-[#FFB800]" />
+            <span>STOPPING (AWAITING AGENT)...</span>
           </div>
         );
       }
@@ -608,7 +663,9 @@ export const LiveMonitorPage: React.FC<LiveMonitorPageProps> = ({
                   ? `Passive capture active on ${captureStatus?.interface || selectedInterface}`
                   : 'Passive network sensor standby'
                 : isCapturing
-                ? `Remote sensor active on ${activeRemoteSensor?.name || 'workstation'}`
+                ? isRemoteStopPending
+                  ? `Stopping remote sensor on ${activeRemoteSensor?.name || 'workstation'}...`
+                  : `Remote sensor active on ${activeRemoteSensor?.name || 'workstation'}`
                 : isRemoteCommandPending
                 ? `Starting remote sensor on ${activeRemoteSensor?.name || 'workstation'}...`
                 : isRemoteOnline
@@ -1029,12 +1086,12 @@ export const LiveMonitorPage: React.FC<LiveMonitorPageProps> = ({
               {isCapturing ? (
                 <button
                   onClick={handleStop}
-                  disabled={isStopping || (isLocalClient && !isOwner && !isAdmin)}
+                  disabled={isStopping || isRemoteStopPending || (isLocalClient && !isOwner && !isAdmin)}
                   title={isLocalClient && !isOwner && !isAdmin ? "Only session owner or administrator can stop this capture" : undefined}
                   className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-[#FF4D5A]/20 hover:bg-[#FF4D5A]/30 border border-[#FF4D5A]/50 text-[#FF4D5A] text-xs font-mono font-bold transition-all cursor-pointer shadow-md shadow-[#FF4D5A]/10 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <Square className="w-4 h-4" />
-                  <span>{isStopping ? 'Stopping...' : 'Stop Monitoring'}</span>
+                  <span>{isStopping || isRemoteStopPending ? 'Stopping...' : 'Stop Monitoring'}</span>
                 </button>
               ) : (
                 <button

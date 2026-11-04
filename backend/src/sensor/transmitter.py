@@ -41,8 +41,9 @@ class TransmitterConfig:
     sensor_id: str = "netra-sensor-win"
     sensor_version: str = "1.0.0-win"
     batch_size: int = 25
-    flush_interval: float = 2.0
+    flush_interval: float = 1.0
     timeout_seconds: float = 20.0
+    heartbeat_interval: float = 1.5
     max_retries: int = 5
     backoff_base: float = 1.0
     backoff_max: float = 30.0
@@ -73,7 +74,7 @@ class SensorTransmitter:
         self.status_provider = status_provider
         self.command_handler = command_handler
         self.last_heartbeat_time: float = 0.0
-        self.heartbeat_interval: float = 3.0
+        self.heartbeat_interval: float = getattr(self.config, "heartbeat_interval", 1.5)
 
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -193,9 +194,15 @@ class SensorTransmitter:
             # Process remote control command from backend if present
             backend_cmd = result.get("command")
             target_iface = result.get("target_interface")
+            cmd_ts = result.get("command_timestamp")
             if backend_cmd and self.command_handler:
                 try:
-                    self.command_handler(backend_cmd, target_iface)
+                    import inspect
+                    sig = inspect.signature(self.command_handler)
+                    if "command_timestamp" in sig.parameters:
+                        self.command_handler(backend_cmd, target_iface, command_timestamp=cmd_ts)
+                    else:
+                        self.command_handler(backend_cmd, target_iface)
                 except Exception as cmd_err:
                     logger.error(f"Error executing remote command '{backend_cmd}': {cmd_err}")
 
@@ -239,7 +246,7 @@ class SensorTransmitter:
                             self.last_heartbeat_time = now
                         except Exception as hb_err:
                             logger.debug(f"Idle heartbeat attempt failed: {hb_err}")
-                    time.sleep(0.5)
+                    time.sleep(0.2)
                     continue
 
                 # Transmit batch

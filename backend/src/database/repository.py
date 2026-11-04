@@ -68,7 +68,7 @@ class FlowRepository:
         return db.query(FlowModel).filter(FlowModel.flow_id == flow_id).first()
 
     @staticmethod
-    def create_or_update(db: Session, flow_data: Dict[str, Any]) -> FlowModel:
+    def create_or_update(db: Session, flow_data: Dict[str, Any], commit: bool = True) -> FlowModel:
         """Insert or update a flow record based on unique flow_id."""
         fid = flow_data.get("flow_id")
         existing = db.query(FlowModel).filter(FlowModel.flow_id == fid).first()
@@ -78,14 +78,16 @@ class FlowRepository:
         if existing:
             for k, v in filtered_data.items():
                 setattr(existing, k, v)
-            db.commit()
-            db.refresh(existing)
+            if commit:
+                db.commit()
+                db.refresh(existing)
             return existing
 
         flow = FlowModel(**filtered_data)
         db.add(flow)
-        db.commit()
-        db.refresh(flow)
+        if commit:
+            db.commit()
+            db.refresh(flow)
         return flow
 
 
@@ -144,7 +146,7 @@ class AlertRepository:
         return query.order_by(AlertModel.timestamp.desc()).limit(limit).all()
 
     @staticmethod
-    def create_or_update(db: Session, alert_data: Dict[str, Any]) -> AlertModel:
+    def create_or_update(db: Session, alert_data: Dict[str, Any], commit: bool = True) -> AlertModel:
         """Insert or update an alert record based on unique alert_id."""
         aid = alert_data.get("alert_id")
         existing = db.query(AlertModel).filter(AlertModel.alert_id == aid).first()
@@ -154,14 +156,16 @@ class AlertRepository:
         if existing:
             for k, v in filtered_data.items():
                 setattr(existing, k, v)
-            db.commit()
-            db.refresh(existing)
+            if commit:
+                db.commit()
+                db.refresh(existing)
             return existing
 
         alert = AlertModel(**filtered_data)
         db.add(alert)
-        db.commit()
-        db.refresh(alert)
+        if commit:
+            db.commit()
+            db.refresh(alert)
         return alert
 
 
@@ -663,7 +667,7 @@ class SensorIngestRepository:
         ).first() is not None
 
     @staticmethod
-    def record_ingestion(db: Session, sensor_id: str, record_id: str, record_type: str) -> bool:
+    def record_ingestion(db: Session, sensor_id: str, record_id: str, record_type: str, commit: bool = True) -> bool:
         """Mark a record as ingested for future idempotency checks."""
         try:
             record = SensorIngestRecordModel(
@@ -672,10 +676,12 @@ class SensorIngestRepository:
                 record_type=record_type
             )
             db.add(record)
-            db.commit()
+            if commit:
+                db.commit()
             return True
         except Exception as e:
-            db.rollback()
+            if commit:
+                db.rollback()
             logger.warning(f"Failed to record ingest idempotency: {e}")
             return False
 

@@ -323,6 +323,151 @@ class TestSensorSyncAndFixes(unittest.TestCase):
         finally:
             shutil.rmtree(temp_queue_dir, ignore_errors=True)
 
+    def test_05_stop_command_responsiveness_and_immediate_state_checkin(self):
+        """
+        Regression Test 5:
+        Verify STOP command responsiveness:
+        - Calling stop() transitions status to 'STOPPED' cleanly within 2 seconds.
+        - Immediately sets transmitter.last_heartbeat_time = 0.0 to trigger check-in without waiting for interval.
+        - Worker thread terminates cleanly.
+        """
+        temp_dir = tempfile.mkdtemp(prefix="tt_stop_test_")
+        try:
+            cfg = SensorConfig(
+                interface="Wi-Fi 3",
+                sensor_id="sensor_stop_fast",
+                sensor_api_key="key_stop",
+                remote_backend_url="https://threattrack-test.onrender.com",
+                enable_remote_transmission=True,
+                queue_spool_dir=temp_dir
+            )
+            with patch("scapy.all.sniff", side_effect=lambda **kwargs: time.sleep(0.1)):
+                sensor = WindowsSensor(cfg)
+                # Mock interface resolution
+                sensor.actual_interface = "Wi-Fi 3"
+                sensor.status = "RUNNING"
+                sensor.transmitter.last_heartbeat_time = 999999.0
+
+                # Measure stop latency
+                t0 = time.time()
+                res = sensor.stop(stop_transmitter=False)
+                stop_duration = time.time() - t0
+
+                self.assertTrue(res["success"])
+                self.assertEqual(sensor.status, "STOPPED")
+                self.assertLess(stop_duration, 2.5, f"Stop took {stop_duration:.2f}s, must be < 2.5s")
+                self.assertEqual(sensor.transmitter.last_heartbeat_time, 0.0, "Heartbeat time must be 0.0 for immediate check-in")
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_06_stale_command_timestamp_rejection(self):
+        """
+        Regression Test 6:
+        Verify command timestamp ordering prevents delayed out-of-order execution:
+        - When STOP with ts=200 arrives, it executes.
+        - When a delayed START with ts=150 arrives, it is dropped as stale.
+        - Status remains STOPPED.
+        """
+        temp_dir = tempfile.mkdtemp(prefix="tt_ts_test_")
+        try:
+            cfg = SensorConfig(
+                interface="Wi-Fi 3",
+                sensor_id="sensor_ts_01",
+                sensor_api_key="key_ts",
+                remote_backend_url="https://threattrack-test.onrender.com",
+                enable_remote_transmission=False,
+                queue_spool_dir=temp_dir
+            )
+            sensor = WindowsSensor(cfg)
+            sensor.status = "RUNNING"
+            sensor._last_command_timestamp = None
+
+            # 1. Process STOP command at timestamp 200.0
+            with patch.object(sensor, "stop", wraps=sensor.stop) as mock_stop:
+                sensor._handle_remote_command(command="STOP", target_interface=None, command_timestamp=200.0)
+                self.assertEqual(sensor.status, "STOPPED")
+                self.assertEqual(sensor._last_command_timestamp, 200.0)
+                mock_stop.assert_called_once()
+
+            # 2. Delayed out-of-order START command arrives with timestamp 150.0 (older than 200.0)
+            with patch.object(sensor, "start") as mock_start:
+                sensor._handle_remote_command(command="START", target_interface="Wi-Fi 3", command_timestamp=150.0)
+                mock_start.assert_not_called()
+                self.assertEqual(sensor.status, "STOPPED", "Stale START command must not flip sensor status to RUNNING")
+
+            # 3. Fresh START command arrives with timestamp 250.0 (> 200.0)
+            with patch.object(sensor, "start") as mock_start:
+                sensor._handle_remote_command(command="START", target_interface="Wi-Fi 3", command_timestamp=250.0)
+                mock_start.assert_called_once()
+                self.assertEqual(sensor._last_command_timestamp, 250.0)
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_07_queue_preservation_and_zero_flow_loss_on_stop(self):
+        """
+        Regression Test 7:
+        Verify that stopping packet capture preserves all active flows in FlowBuilder:
+        - Packets pushed to FlowBuilder without closing FIN/RST remain active.
+        - Calling stop() flushes all active flows to the metadata queue.
+        - Zero flows or metadata records are dropped.
+        """
+        temp_dir = tempfile.mkdtemp(prefix="tt_fl_test_")
+        try:
+            cfg = SensorConfig(
+                interface="Wi-Fi 3",
+                sensor_id="sensor_flush_01",
+                sensor_api_key="key_fl",
+                remote_backend_url="https://threattrack-test.onrender.com",
+                enable_remote_transmission=False,
+                enable_detection=False,
+                queue_spool_dir=temp_dir
+            )
+            sensor = WindowsSensor(cfg)
+            sensor.actual_interface = "Wi-Fi 3"
+            sensor.status = "RUNNING"
+
+            # Start flow builder
+            from src.capture.flow_builder import FlowBuilder
+            sensor._builder = FlowBuilder(
+                timeout_seconds=30.0,
+                consumer_callback=sensor._handle_completed_flow
+            )
+
+            # Feed 3 distinct flows
+            now = time.time()
+            for i in range(3):
+                sensor._builder.process_packet(
+                    timestamp=now,
+                    src_ip="192.168.1.50",
+                    dst_ip=f"93.184.216.{10 + i}",
+                    src_port=50000 + i,
+                    dst_port=443,
+                    protocol="TCP",
+                    byte_len=120,
+                    tcp_flags={"SYN": True}
+                )
+
+            # Active flows in FlowBuilder: 3
+            self.assertEqual(sensor._builder.active_flow_count, 3)
+            self.assertEqual(sensor.metadata_queue.qsize(), 0)
+
+            # Invoke stop()
+            sensor.stop(stop_transmitter=False)
+
+            # FlowBuilder must be completely flushed, and queue must have all 3 flows!
+            self.assertEqual(sensor._builder.active_flow_count, 0)
+            self.assertEqual(sensor.metadata_queue.qsize(), 3, "All 3 active flows must be flushed into metadata queue.")
+            self.assertEqual(sensor.flows_completed, 3)
+
+            # Inspect queued records
+            batch = sensor.metadata_queue.dequeue_batch(max_items=10)
+            self.assertEqual(len(batch), 3)
+            for r in batch:
+                self.assertEqual(r.record_type, "FLOW")
+                self.assertEqual(r.flow["src_ip"], "192.168.1.50")
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

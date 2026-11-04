@@ -7,9 +7,45 @@ feature validation, and the local metadata queue.
 import os
 import uuid
 import socket
+import urllib.parse
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any
+
+
+def mask_api_key(key: Optional[str]) -> str:
+    """Masks API key for safe display in logs and telemetry."""
+    if not key:
+        return "(none)"
+    if len(key) <= 8:
+        return "***"
+    return f"{key[:4]}...{key[-4:]}"
+
+
+def validate_telemetry_backend_url(url: str, enable_remote: bool = True) -> str:
+    """
+    Enforces HTTPS for remote telemetry transmission.
+    Rejects plain HTTP for remote hosts.
+    Allows loopback addresses (127.0.0.1, localhost, ::1) only for local testing.
+    """
+    if not url:
+        raise ValueError("Backend URL cannot be empty.")
+    parsed = urllib.parse.urlparse(url.strip())
+    scheme = (parsed.scheme or "").lower()
+    host = (parsed.hostname or "").lower()
+
+    if scheme not in ("http", "https"):
+        raise ValueError(
+            f"Invalid URL scheme '{scheme}' in '{url}'. Remote telemetry transmission requires HTTPS."
+        )
+
+    is_loopback = host in ("127.0.0.1", "localhost", "::1", "testserver")
+    if enable_remote and not is_loopback and scheme != "https":
+        raise ValueError(
+            f"Insecure remote telemetry transmission rejected: Backend URL '{url}' must use HTTPS. "
+            f"Plain HTTP is forbidden for remote servers."
+        )
+    return url.strip()
 
 
 def get_default_sensor_id() -> str:
@@ -23,8 +59,8 @@ class SensorConfig:
     """Configuration settings for the NETRA Windows Sensor."""
     interface: Optional[str] = None
     duration: Optional[float] = None  # None = continuous capture until stopped
-    flow_timeout: float = 30.0        # Seconds of inactivity before flow expiration
-    flow_flush_interval: float = 3.0  # Periodic sweep interval for flow eviction
+    flow_timeout: float = 15.0        # Seconds of inactivity before flow expiration (optimized from 30.0s)
+    flow_flush_interval: float = 2.0  # Periodic sweep interval for flow eviction (optimized from 3.0s)
     packet_limit: Optional[int] = None
 
     # Queue & Spool Settings
@@ -53,9 +89,17 @@ class SensorConfig:
     # Remote Ingestion & Cloud Transmission
     enable_remote_transmission: bool = False
     remote_backend_url: str = "http://127.0.0.1:8000"
-    sensor_api_key: Optional[str] = None
+    sensor_api_key: Optional[str] = field(default=None, repr=False)
     transmission_batch_size: int = 25
-    transmission_interval: float = 2.0
+    transmission_interval: float = 1.0
+
+    def __post_init__(self):
+        """Validate configuration parameters upon initialization."""
+        if self.enable_remote_transmission and self.remote_backend_url:
+            self.remote_backend_url = validate_telemetry_backend_url(
+                self.remote_backend_url,
+                enable_remote=self.enable_remote_transmission
+            )
 
     def to_dict(self) -> Dict[str, Any]:
         """Return dictionary representation of sensor configuration."""

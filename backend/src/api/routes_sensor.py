@@ -216,8 +216,8 @@ def ingest_sensor_batch(
             flow_data["last_seen"] = flow_data.get("last_seen") or flow_data["timestamp"]
 
             try:
-                FlowRepository.create_or_update(db, flow_data)
-                SensorIngestRepository.record_ingestion(db, sensor.sensor_id, record_id, record_type)
+                FlowRepository.create_or_update(db, flow_data, commit=False)
+                SensorIngestRepository.record_ingestion(db, sensor.sensor_id, record_id, record_type, commit=False)
                 accepted_count += 1
                 ack_ids.append(record_id)
                 batch_flows += 1
@@ -259,8 +259,8 @@ def ingest_sensor_batch(
             }
 
             try:
-                AlertRepository.create_or_update(db, complete_alert)
-                SensorIngestRepository.record_ingestion(db, sensor.sensor_id, record_id, record_type)
+                AlertRepository.create_or_update(db, complete_alert, commit=False)
+                SensorIngestRepository.record_ingestion(db, sensor.sensor_id, record_id, record_type, commit=False)
                 accepted_count += 1
                 ack_ids.append(record_id)
                 batch_alerts += 1
@@ -272,12 +272,20 @@ def ingest_sensor_batch(
 
         elif record_type in ("HEARTBEAT", "SENSOR_STATUS"):
             # Heartbeats and status reports update sensor telemetry without creating flows
-            SensorIngestRepository.record_ingestion(db, sensor.sensor_id, record_id, record_type)
+            SensorIngestRepository.record_ingestion(db, sensor.sensor_id, record_id, record_type, commit=False)
             accepted_count += 1
             ack_ids.append(record_id)
         else:
             rejected_count += 1
             errors.append(f"Record {record_id} has unrecognized record_type '{record_type}'.")
+
+    # Fast single commit for the batch to eliminate sequential database round-trip overhead
+    if accepted_count > 0:
+        try:
+            db.commit()
+        except Exception as batch_commit_err:
+            db.rollback()
+            logger.error(f"Error committing batch ingestion: {batch_commit_err}")
 
     # 5. Extract reported active interface from ingested records if present
     reported_interface = None
@@ -289,18 +297,17 @@ def ingest_sensor_batch(
                 break
 
     # Determine explicit pending user command if any
+    command_ts = None
     with _COMMAND_LOCK:
         pending_explicit = _EXPLICIT_SENSOR_COMMANDS.get(sensor.sensor_id)
         has_explicit_stop = bool(
-            pending_explicit
-            and pending_explicit.get("active")
-            and pending_explicit.get("command") == "STOPPED"
+            pending_explicit and pending_explicit.get("active") and pending_explicit.get("command") == "STOPPED"
         )
         has_explicit_start = bool(
-            pending_explicit
-            and pending_explicit.get("active")
-            and pending_explicit.get("command") == "RUNNING"
+            pending_explicit and pending_explicit.get("active") and pending_explicit.get("command") == "RUNNING"
         )
+        if pending_explicit and pending_explicit.get("active"):
+            command_ts = pending_explicit.get("issued_at")
 
     # State synchronization logic:
     # 1. If an agent is actively RUNNING:
@@ -390,6 +397,7 @@ def ingest_sensor_batch(
         "rejected": rejected_count,
         "ack_ids": ack_ids,
         "command": current_target_state,
+        "command_timestamp": command_ts,
         "target_interface": current_target_iface,
         "errors": errors[:10]  # Cap error list to prevent response bloating
     }

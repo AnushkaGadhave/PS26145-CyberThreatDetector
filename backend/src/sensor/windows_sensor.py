@@ -125,6 +125,7 @@ class WindowsSensor:
         self._alert_pipeline: Optional[AlertPipeline] = None
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._last_command_timestamp: Optional[float] = None
 
         # Ring buffer of recent flow events for live monitoring
         self.recent_events: deque = deque(maxlen=50)
@@ -236,13 +237,16 @@ class WindowsSensor:
             self.threats_detected = 0
             self.recent_events.clear()
 
-            # 3. Initialize FlowBuilder
+            # 3. Initialize FlowBuilder with tighter responsive timeouts
             self._builder = FlowBuilder(
                 timeout_seconds=self.config.flow_timeout,
                 flush_interval_seconds=self.config.flow_flush_interval,
                 consumer_callback=self._handle_completed_flow,
                 jsonl_path=None,
-                csv_path=None
+                csv_path=None,
+                active_timeout_seconds=10.0,
+                udp_timeout_seconds=2.0,
+                tcp_idle_timeout_seconds=5.0
             )
 
             # 4. Initialize ML AlertPipeline if enabled
@@ -297,11 +301,12 @@ class WindowsSensor:
 
     ALLOWED_COMMANDS = {"START", "STOP", "RUNNING", "STOPPED"}
 
-    def _handle_remote_command(self, command: str, target_interface: Optional[str] = None):
+    def _handle_remote_command(self, command: str, target_interface: Optional[str] = None, command_timestamp: Optional[float] = None):
         """
         Dispatch remote control commands issued from the web dashboard.
         Strictly validates commands against ALLOWED_COMMANDS and validates target
         interfaces against locally discovered host network adapters.
+        Synchronizes commands with timestamps to discard stale out-of-order commands.
         """
         if not command or not isinstance(command, str):
             return
@@ -313,6 +318,15 @@ class WindowsSensor:
                 f"Allowed commands are strictly: {sorted(list(self.ALLOWED_COMMANDS))}."
             )
             return
+
+        # Synchronize commands using timestamp to prevent stale out-of-order execution
+        if command_timestamp is not None:
+            if self._last_command_timestamp is not None and command_timestamp < self._last_command_timestamp:
+                logger.debug(
+                    f"[REMOTE COMMAND] Ignored stale command '{command}' (ts: {command_timestamp} < last: {self._last_command_timestamp})"
+                )
+                return
+            self._last_command_timestamp = command_timestamp
 
         # 1. Handle START / RUNNING
         if cmd_upper in ("START", "RUNNING"):
@@ -366,7 +380,7 @@ class WindowsSensor:
         self._stop_event.set()
 
         if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=3.5)
+            self._thread.join(timeout=2.0)
 
         # Flush any remaining active flows from the flow builder
         if self._builder:
@@ -392,7 +406,11 @@ class WindowsSensor:
                 f"Threats: {self.threats_detected} | Queued: {self.metadata_queue.enqueued_count}"
             )
 
-            return {
+        # Reset transmitter's last heartbeat time so it transmits an immediate state check-in
+        if self.transmitter:
+            self.transmitter.last_heartbeat_time = 0.0
+
+        return {
                 "success": True,
                 "message": f"Sensor stopped cleanly. Processed {self.packets_captured} packets into {self.flows_completed} flows.",
                 "status": self.status,
@@ -471,6 +489,8 @@ class WindowsSensor:
                         timeout=1.0,
                         store=0  # ZERO payload or packet buffering in RAM
                     )
+                    if self._builder and not self._stop_event.is_set():
+                        self._builder.flush_expired(time.time())
                 except PermissionError as perm_err:
                     logger.error(f"Permission denied while capturing on '{iface}': {perm_err}")
                     self.error_message = (
